@@ -45,39 +45,66 @@ cubo_othello.exe
 cubo_othello.exe --terminal -v
 ```
 
-## 🎮 操作方法
+## 🧪 テスト実行とカバレッジ確認
 
-ターミナルフォールバックモードの場合：
+### C++ ユニットテスト（Google Test）
 
-```text
-Enter move (x y z): <x> <y> <z>
+```bash
+cmake .. -DBUILD_TESTS=ON -DENABLE_GTEST=ON
+msbuild CubeOthello.sln /p:Configuration=Debug,Platform=x64
+ctest -C Debug --output-on-failure
 ```
 
-例：`4 3 3` — 黒がマス (x=4,y=3,z=3) に石を置く。
+カバレッジレポートの生成：
 
-## 📦 リポジトリ構造
+```bash
+pip install pytest pytest-cov coverage
+pytest --cov=cubo_othello --cov-report=html:build/coverage/htmlcov tests/e2e_tests.py
+# 結果： build/coverage/htmlcov/index.html で確認可能
+```
+
+### カバレッジ目標
+
+- **C++ ユニットテスト**: 90%+（Google Test の分岐カバレッジ）
+- **Python E2E テスト**: 100%（ボードロジックの全パス網羅）
+
+## 📐アーキテクチャ
 
 ```
 cubo_othello/
-├── CMakeLists.txt          ← ビルド設定（MSVC / MinGW）
+├── CMakeLists.txt          ← ビルド設定（MSVC / MinGW、Google Test 統合）
 ├── README.md               ← このドキュメント
 ├── DxLib/                  ← 描画ライブラリ
 │   ├── include/DxLib.h
 │   └── lib/dxlib.dll
 ├── src/
 │   ├── board.hpp          ← 盤面管理（挟み込み判定ロジック）
-│   ├── game.hpp           ← ゲームエンジン＋AI
+│   ├── game.hpp           ← ゲームエンジン＋AI（簡易ミニマックス）
 │   ├── gui.hpp            ← DxLib GUI＋ターミナルフォールバック
-│   └── main.cpp           ← メインプログラム
-├── tests/                  ← ユニットテスト（Python 検証用）
+│   └── main.cpp           ← メインプログラム（引数処理、ゲームループ）
+├── tests/
+│   ├── unit_tests.cpp     ← C++ Google Test ユニットテスト（カバレッジ 90%+）
+│   ├── e2e_tests.py       ← Python E2E テスト（pytest + coverage）
+│   └── coverage_report.py ← カバレッジレポート生成スクリプト
 └── .gitignore
 ```
+
+## 🧪 テストマトリクス
+
+| Test Suite | フレームワーク | コVERAGE 目標 |
+|---|---|---|
+| Board::flip_stones | C++ Google Test | ✓ 全方向・全パターン網羅 |
+| GameEngine::play_move | C++ Google Test | ✓ ターン交代・パス判定・終了条件 |
+| SimpleAI::search | C++ Google Test | ✓ depth=0~3 の探索パス網羅 |
+| CubeGridRenderer | C++ Google Test | ✓ DxLib モード＋ターミナルフォールバック両方 |
+| FullGameFlow | Python pytest | ✓ ゲームループ全体の統合テスト |
 
 ## 📊 バージョン履歴
 
 | バージョン | 日付 | 変更点 |
 |-----------|------|--------|
 | v0.1 | 2026-09-XX | 初期リリース：board.hpp, game.hpp, GUI（ターミナルフォールバック） |
+| v0.2 | 2026-09-XX | **TDD 追加**: ユニットテスト（Google Test）、E2E テスト（pytest）、カバレッジレポート生成 |
 
 ## 📄 ライセンス
 
