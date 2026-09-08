@@ -1,0 +1,17 @@
+# Windows
+.DS_Store
+Thumbs.db
+
+# Build output
+build/
+*.exe
+*.obj
+*.lib
+*.pdb
+
+# DXLib binaries
+DxLib/
+dxlib-bin.zip
+
+# NUL device (Windows)
+nul
