@@ -1,0 +1,598 @@
+全体設計
+
+1. 全体アーキテクチャ
+
+ ┌───────────────────────────────────────────────────────────┐
+ │                    Cube Othello System                       │
+ ├───────────────────────────────────────────────────────────┤
+ │                                                             │
+ │   ┌──────────────┐         ┌──────────────┐                │
+ │   │    Main       │◀──────▶│  GameLoop     │                │
+ │   │ (WinMain)     │         │              │                │
+ │   └──────────────┘         └──────────────┘                │
+ │           │                              ▲                  │
+ │           ▼                              │                   │
+ │   ┌─────────────────────────────────────────┐             │
+ │   │              CubeBoard                   │◀──────AI───▶│
+ │   │  ┌───────────────────────────────────┐  │                │
+ │   │  │  grid[3][8] = int                │  │                │
+ │   │  │  turn: BLACK/WHITE               │  │                │
+ │   │  │  game_over: bool                 │  │                │
+ │   │  │  result_code: int                │  │                │
+ │   │  └───────────────────────────────────┘  │                │
+ │   │                                           │             │
+ │   │  メソッド一覧：                             │             │
+ │   │    • reset()                              │             │
+ │   │    • initialize()                        │             │
+ │   │    • get_cell(x,y,z)                     │             │
+ │   │    • set_cell(x,y,z,color)              │             │
+ │   │    • is_full()                           │             │
+ │   │    • count_pieces()                      │             │
+ │   │    • get_valid_moves(color)              │             │
+ │   │    • place_stone(x,y,z,color)           │             │
+ │   │      └─ 6 方向探索                       │             │
+ │   │        └─ 挟み込み判定                   │             │
+ │   │        └─ 反転処理                        │             │
+ │   │    • count_flips(x,y,z,color)           │             │
+ │   │      └─ 挟まれた石の枚数を返す            │             │
+ │   │                                           │             │
+ │   │  プライベートメソッド：                      │             │
+ │   │    • valid(x,y,z)                        │             │
+ │   │    • opponent(color)                     │             │
+ │   │    • get_stone_face_color(z)             │ ← 明度変換      │
+ │   │                                            │             │
+ │   │  グリッド座標：                            │             │
+ │   │    x: [0,7] (→右)                         │             │
+ │   │    y: [0,7] (↓下)                         │             │
+ │   │    z: [0..2] (↑奥)                        │ ← 3 レーヤー     │
+ │   └─────────────────────────────────────────┘               │
+ │           ▲                                                  │
+ │           │          ┌──────────────┐                       │
+ │   ┌──────────────┐  │    AI         │                       │
+ │   │    Display    │◀─┴──────────────┤                       │
+ │   │ (DXLib GUI)   │                 │ SimpleAI              │
+ │   │               │                 │ - color: BLACK/WHITE │
+ │   │               │                 │ - depth: 3           │
+ │   │ メソッド一覧： │                 │                       │
+ │   │    • init()            │             │ メソッド一覧：       │
+ │   │    • render_frame()    │◀───────┬──│ • evaluate(board)│
+ │   │    • draw_cube_faces() │        │  │   score = my_stones - │
+ │   │    • draw_grid()       │        │  │     opponent_stones   │
+ │   │    • draw_stone(x,y,z,color)│    │  │                     │
+ │   │    • mark_valid_moves()│        │  │ • search(board)      │
+ │   │    • handle_input()     │        │  │   valid = get_valid_moves()│
+ │   │    • draw_turn_indicator()│     │  │   for move in valid:│
+ │   │                         │        │  │       place_stone()   │
+ │   │                         │        │  │       score = evaluate()│
+ │   │                         │        │  │   return best_move   │
+ │   └─────────────────────────┘        │  │                     │
+ │                                        │             │
+ │   ┌──────────────┐                   │             │
+ │   │    GameEngine│◀──────────────────┘             │
+ │   │               │                                 │
+ │   │ メソッド一覧： │                                 │
+ │   │    • start()          │ ← 初期化（盤面クリア＋配置）     │
+ │   │    • run_loop()       │ ← while !game_over      │
+ │   │    • check_game_over()│ ← is_full() or no_moves()│
+ │   │    • render_final()   │ ← 結果表示              │
+ │   └──────────────┘                                 │
+ │                                                     │
+ └─────────────────────────────────────────────────────┘
+
+ 2. クラス詳細設計図
+ 2-1. CubeBoard クラスの UML
+
+ +-----------------------------+
+ |      Class: CubeBoard       |
+ +-----------------------------+
+ | Attributes:                 |
+ |   +-- grid: array[3][8][8] | ← 3 レーヤー×8×8 マス
+ |   +-- turn: int            | ← -1=未開始, 0=BLACK, 1=WHITE
+ |   +-- game_over: bool      |
+ |   +-- result_code: int     | ← 0=継続中, 1=BLACK 勝，2=DRAW, 3=NO MOVES
+ +-----------------------------+
+ | Methods:                    |
+ |   • reset()                │ ← grid を全 EMPTY(-1) にする
+ |   • initialize()           │ ← 中心部 (x,y,z)∈{3,4}×{3,4}×{3..5} に黒・白を配置
+ |   • get_cell(x,y,z)        │ ← 指定マスの色を取得（範囲外なら EMPTY）
+ |   • set_cell(x,y,z,color) │ ← 指定マスに石を設定（範囲チェック付き）
+ |   • is_full()              │ ← すべてのマスが埋まっているか
+ |   • count_pieces()         │ ← {black_count, white_count} を返す
+ |   • get_valid_moves(color) │ ← その色が置けるマスのリストを返す
+ |   • place_stone(x,y,z,color)|← 石を置き、挟み込みを実行して返る
+ |     ┌─ 6 方向探索 (±x, ±y, ±z)              │
+ |     ├─ 相手の石が続くか判定                  │
+ |     ├─ 空マスならその方向無効                 │
+ |     ├─ 自分の色なら挟み込み完了              │
+ |     └─ 挟まれた全石を反転（+ を返す）        │
+ |   • count_flips(x,y,z,color)│← 1 マスの挟み込み枚数を数える（評価関数用）
+ |   • flip_direction(dx,dy,dz,x,y,z,color)|← 1 方向の探索を実行
+ |     ├─ path に相手の石を蓄積                   │
+ |     └─ 前方に自分の色があれば path をすべて反転 |
+ |   • is_valid(x,y,z)       │ ← 盤面内か否か
+ |   • opponent(color)        │ ← BLACK→WHITE, WHITE→BLACK
+ +-----------------------------+
+ | Private Methods:            |
+ |   • get_stone_face_color(z)│← z<=1 ? DARKGRAY : BLACK（明度変化）
+ +-----------------------------+
+
+ 2-2. SimpleAI クラスの UML
+
+ +-----------------------------+
+ |      Class: SimpleAI        |
+ +-----------------------------+
+ | Attributes:                 |
+ |   +-- color: int           │ ← BLACK または WHITE
+ |   +-- depth: int           │ ← 探索深さ（デフォルト=3）
+ +-----------------------------+
+ | Methods:                    |
+ |   • evaluate(board)        │ ← 自分の石 − 相手の石を計算
+ |     score = board.count_pieces(my_color) - board.count_pieces(opponent_color)
+ |   • search(board)          │ ← depth 段階の最善手を探す
+ |     ├─ valid_moves = board.get_valid_moves(color)
+ |     ├─ if not valid_moves: return None（パス）
+ |     └─ best_score, best_move = minimax(...)
+ |   • minimax(board, d, is_maximizing) │ ← 再帰探索
+ |     ├─ depth == 0 then evaluate(board)
+ |     ├─ moves = board.get_valid_moves(my_color)
+ |     ├─ if not moves: return (−∞, None)（パス）
+ |     ├─ for move in moves:
+ |     │   ├─ board.place_stone(move)
+ |     │   ├─ score = minimax(board, d-1, !is_maximizing)
+ |     │   └─ board.reset()（バックトラック）
+ |     └─ return max/min(score, move) by is_maximizing
+ +-----------------------------+
+
+ 2-3. GameEngine クラスの UML
+
+ +------------------------------------------+
+ |       Class: GameEngine                   |
+ +------------------------------------------+
+ | Attributes:                               |
+ |   +-- board: CubeBoard*                  │ ← 盤面のポインタ
+ |   +-- turn: int                          │ ← BLACK/WHITE
+ |   +-- game_over: bool                    │ ← ゲーム終了フラグ
+ |   +-- result_code: int                   │ ← 最終結果コード
+ |   +-- use_gui: bool                      │ ← GUI モードか否か
+ +------------------------------------------+
+ | Methods:                                  |
+ |   • start()                              │
+ |     ├─ board.reset()                     │
+ |     ├─ board.initialize()                │ ← 中心部 8 マスの配置
+ |     └─ turn = BLACK                      │ ← 黒から開始
+ |   • run_loop()                           │ ← メインループ
+ |     while !game_over:                    │
+ |       ├─ if board.is_full():             │
+ |       │   result_code = DRAW; break      │
+ |       ├─ valid_moves = board.get_valid_moves(turn)
+ |       ├─ if use_ai and turn == ai.color:│
+ |       │   move = ai.search(board)        │ ← AI が手を選ぶ
+ |       └─ else:                           │
+ |           idx = random(0, len(valid)-1) │ ← ランダム選択（人間対人間）
+ |           move = valid_moves[idx]        │
+ |       ├─ board.place_stone(move.x, move.y, move.z, turn)
+ |       ├─ turn = (turn == BLACK) ? WHITE : BLACK  ← ターン交代
+ |       ├─ if !board.has_any_valid_move(): │
+ |       │   result_code = NO_MOVES; game_over=true
+ |       └─ game.render()                   │ ← DXLib で描画
+ |   • check_game_over()                    │ ← is_full() or no_moves()
+ |   • render_final_score()                 │ ← 勝敗メッセージ表示
+ +------------------------------------------+
+
+ 2-4. Display クラス（DXLib GUI）の UML
+
+ +-------------------------------------------------------------+
+ |              Class: DXLibDisplay (DXLib をラップ)             |
+ +-------------------------------------------------------------+
+ | Attributes:                                                  |
+ |   +-- dxlib: DXLib*                                         │ ← DXLib のインスタンス
+ |   +-- screen_width: int  = 720                              │
+ |   +-- screen_height: int = 560                               │
+ |   +-- board_size: int  = 8                                  │ ← 8x8×3=192 マス
+ |   +-- stone_radius: int = 14                                │
+ |   +-- grid_spacing: int = 4                                 │
+ |   +-- padding_x: int  = 28                                  │
+ |   +-- padding_y: int  = 36                                  │ ← タイトル分のマージン
+ +-------------------------------------------------------------+
+ | Constants (color):                                           |
+ |   COLOR_BLACK    = RGB(28, 28, 34)     ← 背景・後面の暗い色
+ |   COLOR_WHITE    = RGB(255,255,255)    ← 石（白）＆文字
+ |   COLOR_DARKGRAY = RGB(46, 46, 58)      ← 前面（z=0..1）
+ |   COLOR_LIGHTGRAY= RGB(89, 89, 107)     ← グリッド線
+ |   COLOR_ACCENT   = RGB(98,174,173)    │ ← 「+」マークの色
+ +-------------------------------------------------------------+
+ | Methods:                                                      |
+ |   • init()                                                    │
+ |     ├─ DXInit(screen_width, screen_height, true)              │
+ |     └─ set_background(COLOR_BLACK)                            │
+ |   • render_frame()                                           │ ← フレームごとの描画処理
+ |     ├─ clear()                                                │
+ |     ├─ draw_cube_faces()                                      │ ← 8 つの面の枠線
+ |     ├─ draw_grid()                                            │ ← グリッド線を描く
+ |     ├─ draw_stones()                                          │ ← z=0..7 の全層で石を描画
+ |     └─ update_turn_indicator()                                │ ← ターン・スコア表示
+ |   • draw_cube_faces(): 8 つの面の枠線を引く                   │
+ |     ┌──────────────────────────────┐                          │
+ |     │                              │← 前面（DARKGRAY）           │
+ |     ├─ front: (cx-Px, cy+g-14) .. │                          │
+ |     ├─ back : (cx+g, cy+g-14+4) ..│← 後面（BLACK＝暗い）        │
+ |     ├─ left : (cx-Px+g-4, cy+g-14)|                          │
+ |     ├─ right:(cx+7x+R+8, cy)      │                          │
+ |     ├─ top  :(cx-Px, cy-g+14)     │← z=0..1（明るい）         │
+ |     └─ bottom:(cx-Px+g-4, cy+7x-14)│                          │
+ |                                                          │
+ |     ┌──────────────────────────────┐                          │
+ |     │                              │← 後面（BLACK）            │
+ |     ├─ back : (cx+g, cy+g-14+4).. │← z=2..3                  │
+ |     ├─ bottom:(cx-Px+g-4, cy+7x-14)|                          │
+ |     └──────────────────────────────┘                          │
+ |                                                          │
+ |   • draw_grid()                                              │ ← 格子線を描く
+ |     for x in [0..6]:
+ |       DLine(cx + Px + xGS, cy - g + 14, cx+Px+xGS, cy)
+ |     for y in [0..6]:
+ |       DLine(cx - Px, cy - g + (7-y)GS, cx-Px+(7-y)GS, cy)
+ |                                                          │
+ |   • draw_stones()                                            │ ← 各マスの石を描く
+ |     for z = 0..2:                                           │
+ |       face_color = get_stone_face_color(z)                  │
+ |       for y in [0..7]:                                      │
+ |         cy_pos = cy - g + (7-y)GS                         │ ← y 軸は「左上がり」
+ |         for x in [0..7]:                                    │
+ |           cx_pos = cx + Px + xGS                          │ ← x 軸は「右下がり」
+ |           ┌─ マス枠線（細いグリッド）                         │
+ |           ├─ if grid[z][y][x] == BLACK:                    │
+ |           │   draw_ellipse(cx_pos, cy_pos, COLOR_STONE_BLACK)│
+ |           ├─ elif grid[z][y][x] == WHITE:                   │
+ |           │   draw_ellipse(cx_pos, cy_pos, COLOR_WHITE)     │ ← 白の石は RGB(245,240,230)
+ |           └─ else:                                          │
+ |               DTextString(cx_pos-4, cy_pos+R+2, ".", "gray")│
+ |                                                          │
+ |   • handle_input(): キー入力とマウスクリックの処理           │
+ |     ├─ ESC キー → ゲーム終了                                 │
+ |     └─ マウスクリック：有効手のマスをクリックすれば置く       │
+ |                                                          │
+ +-------------------------------------------------------------+
+
+ 3. ファイル構成図
+
+ cubo_othello_cpp/
+ ├── CMakeLists.txt                    ← ビルド設定（DXLib の includeパスなど）
+ │   ├─ project(CubeOthello LANGUAGES CXX)
+ │   ├─ add_executable(${PROJECT_NAME} src/main.cpp)
+ │   └─ target_include_directories(... dxlib_libs ...)        │
+ ├── README.md                         ← 使い方・ビルド手順
+ ├── build.bat                         ← Windows のビルドスクリプト（MSVC）
+ │   ├─ cmake .. -G "Visual Studio 17 2022"
+ │   └─ cmake --build . --config Release
+ ├── src/
+ │   ├── main.cpp                      ← WinMain + メインループ
+ │   │   ┌─ CubeBoard board;          │ ← コンストラクタで初期化
+ │   │   ├─ SimpleAI* ai = nullptr;    │ ← AI オブジェクト（NULL は人間対人間）
+ │   │   ├─ Display display(screen_width, screen_height);
+ │   │   ├─ GameEngine engine(&board, &display, use_gui=true);
+ │   │   └─ 無限ループで render_frame() を呼び出す              │
+ │   ├── board.hpp                     ← CubeBoard クラスの宣言
+ │   └── board.cpp                     ← CubeBoard の実装（インライン関数も含む）
+ ├── include/
+ │   └── dxlib_wrapper.h               ← DXLib のラッパー（optional）
+ └── assets/                           ← リソースファイル（画像など）
+     ├── logo.png                      ← アプリアイコン
+     └── sound.mp3                     ← ゲームオーバー音源
+
+ 4. アルゴリズムの深掘り
+ 挟み込み判定の完全な手順（6 方向全探索）
+
+ flip_stones(x, y, z, player_color):
+     // 入力：盤面内の座標 (x,y,z) と現在のターン color
+     // 出力：そのマスに石を置いたとき、挟み込みで反転する石のリスト
+
+     flipped = []                                      // 反転した石の記録用リスト
+     directions = [ (+1,0,0), (-1,0,0),              │ ← 6 つの方向ベクトル
+                     (0,+1,0), (0,-1,0),
+                     (0,0,+1), (0,0,-1) ]
+
+     for each (dx, dy, dz) in directions:
+         // ── 探索開始 ───────────────────────────────
+         rx ← x + dx                                  │ ← 直後のマス（相手の石か？）
+         ry ← y + dy
+         rz ← z + dz
+
+         path = []                                    │ ← 挟まれた石の座標を蓄積するリスト
+
+         // ── 「相手の石が続く」のかを確認 ────────────────
+         while is_valid(rx, ry, rz):
+             cell = board[rx][ry][rz]
+
+             if cell == opponent(player_color):       │ ← 相手の石 → path に追加
+                 path.append((rx, ry, rz))
+             else if cell == EMPTY:                   │ ← 空マス → この方向は無効
+                 break
+             else:                                    │ ← 自分の色（または壁）→ 止まる
+                 break
+
+         // ── 挟み込みを検出 ────────────────────────────
+         if path is not empty:                        │ ← 「相手の石 → 空マス」のケースはスキップ
+             tx ← rx + dx                             │ ← 直前のマスのさらに先
+             ty ← ry + dy
+             tz ← rz + dz
+
+             while is_valid(tx, ty, tz):             │ ← 自分の色を探し続ける
+                 cell = board[tx][ty][tz]
+
+                 if cell == player_color:              │ ← 自分の色！→ 挟み込み完了
+                     // ── path にある全石を反転 ────────
+                     for each (px, py, pz) in path:
+                         board[pz][py][px] = player_color
+                         flipped.append((px, py, pz))
+                     break                            │ ← この方向は終了
+
+                 if cell == EMPTY:                     │ ← 空マス → 挟み込みなし（パス）
+                     break
+
+             // else: cell==opponent → さらに先を探索
+
+ 有効手の判定ロジック（簡易版：ランダム選択）
+
+ cpp
+ std::vector<std::tuple<int,int,int>> CubeBoard::get_valid_moves(int player_color) {
+     std::vector<std::tuple<int,int,int>> valid;
+
+     for (int z = 0; z < BOARD_SIZE; ++z) {
+         for (int y = 0; y < BOARD_SIZE; ++y) {
+             for (int x = 0; x < BOARD_SIZE; ++x) {
+                 if (grid_[z][y][x] == EMPTY) {
+                     // 挟み込み判定（6 方向探索）
+                     auto flipped = flip_stones(x, y, z, player_color);
+                     if (!flipped.empty()) {
+                         valid.push_back({x, y, z});
+                     }
+                 }
+             }
+         }
+     }
+
+     return valid;
+ }
+
+ AI の評価関数：石数差（depth=3 のミニマックス）
+
+ cpp
+ int SimpleAI::evaluate(const CubeBoard& board) const {
+     auto [black_count, white_count] = board.count_pieces();
+
+     if (color_ == BLACK) {
+         return black_count - white_count;   // 黒が有利なら正値
+     } else {
+         return white_count - black_count;   // 白が有利なら正値
+     }
+ }
+
+ std::optional<std::tuple<int,int,int>> SimpleAI::search(const CubeBoard& board) const {
+     auto valid_moves = board.get_valid_moves(color_);
+
+     if (valid_moves.empty()) return std::nullopt;  // パス
+
+     int best_score = evaluate(board);
+     auto best_move = valid_moves[0];  // 初期化：最初の有効手
+
+     for (const auto& move : valid_moves) {
+         board.place_stone(std::get<0>(move), std::get<1>(move), std::get<2>(move), color_);
+
+         int score = minimax(board, depth_ - 1, false);   // 相手のターンに換算
+
+         board.reset();  // バックトラック：盤面を元に戻す
+
+         if (score > best_score) {
+             best_score = score;
+             best_move = move;
+         }
+     }
+
+     return best_move;
+ }
+
+ 5. データ構造の完全な定義（C++）
+ 定数・型定義：types.h
+
+ cpp
+ // types.h — 全共有定数の宣言ファイル
+ #pragma once
+
+ #include <cstdint>
+
+ namespace cubeothello {
+
+ // ─── 盤面サイズ ──────────────────────────────
+ constexpr int BOARD_SIZE = 8;          // x, y, z の各軸の長さ（8×8×3=192 マス）
+ constexpr int Z_LAYERS   = 3;          // レーヤー数
+
+ // ─── ゲーム定数 ──────────────────────────────
+ constexpr int COLOR_BLACK   = 0;        // 黒色の石
+ constexpr int COLOR_WHITE   = 1;        // 白色の石
+ constexpr int COLOR_EMPTY   = -1;       // 空（初期状態）
+
+ // ─── ターン定数 ──────────────────────────────
+ constexpr int TURN_UNKNOWN      = -1;   // ゲーム未開始
+ constexpr int TURN_BLACK        = 0;    // 黒のターン
+ constexpr int TURN_WHITE        = 1;    // 白のターン
+
+ // ─── 結果コード ──────────────────────────────
+ constexpr int RESULT_CONTINUE = 0;       // ゲーム継続中
+ constexpr int RESULT_BLACK_WINS = 1;     // BLACK が勝ち
+ constexpr int RESULT_DRAW = 2;           // ドロー（盤面埋まり）
+ constexpr int RESULT_NO_MOVES = 3;       // ゲームオーバー（両者無手）
+
+ // ─── DXLib 色定義（RGB）─────────────────────
+ constexpr uint16_t COLOR_DARKGRAY   = 0x2C2C22;  // 前面：暗い灰色
+ constexpr uint16_t COLOR_BLACK      = 0x1C1C22;  // 後面：より暗い（奥行き表現）
+ constexpr uint16_t COLOR_WHITE      = 0xFFFFFF;  // 白色の石・文字
+ constexpr uint16_t COLOR_STONE_BLACK= 0x2C1A03;  // 黒色の石
+ constexpr uint16_t COLOR_STONE_WHITE= 0xF5F0E6;  // 白色の石（暖かみのある白）
+ constexpr uint16_t COLOR_ACCENT     = 0x62AEAD;  // アクセントカラー（+ マーク用）
+
+ // ─── GUI 定数 ──────────────────────────────
+ constexpr int SCREEN_WIDTH  = 720;       // 画面幅
+ constexpr int SCREEN_HEIGHT = 560;       // 画面高さ
+ constexpr int STONE_RADIUS  = 14;        // 石の半径（ピクセル）
+ constexpr int GRID_SPACING  = 4;         // グリッド間隔
+ constexpr int PADDING_X     = 28;        // 左右のパディング
+ constexpr int PADDING_Y     = 36;        // 上下のパディング
+
+ } // namespace cubeothello
+
+ クラス定義：board.hpp
+
+ cpp
+ // board.hpp — CubeBoard クラスの宣言
+ #pragma once
+
+ #include <dxlib.h>
+ #include <array>
+ #include <vector>
+ #include <tuple>
+ #include "types.h"
+
+ namespace cubeothello {
+
+ /**
+  * @brief 立方体盤面（8×8×3）の管理クラス
+  *
+  * メモバ：grid[3][8][8]、turn=-1/0/1、game_over=bool、result_code=0..3
+  /
+ class CubeBoard {
+ public:
+     /* @brief 現在のターン（-1:未開始, 0:BLACK, 1:WHITE）/
+     int turn() const noexcept;
+
+     /* @brief ゲーム終了フラグ /
+     bool game_over() const noexcept;
+
+     /* @brief 結果コード：0=継続中, 1=BLACK 勝，2=DRAW, 3=NO MOVES /
+     int result_code() const noexcept;
+
+     // ─── メインインタフェース ────────────────────────────────────────
+
+     /*
+      * @brief ゲームを初期化する（盤面クリア＋中心部配置）
+      * @return void
+      /
+     void initialize();
+
+     /*
+      * @brief 指定したプレイヤーが石を置く処理
+      * @param x   マスの x 座標 (0..7)
+      * @param y   マスの y 座標 (0..7)
+      * @param z   レーヤーの z 座標 (0..2)
+      * @param color BLACK または WHITE
+      * @return true  成功、false 盤面外や埋まっている場合
+      /
+     bool place_stone(int x, int y, int z, int color);
+
+     /*
+      * @brief そのプレイヤーが置ける有効手のリストを取得
+      * @param player_color BLACK または WHITE
+      * @return std::vector<tuple<int,int,int>> 有効手の座標のリスト（空なら置けない）
+      /
+     std::vector<std::tuple<int,int,int>> get_valid_moves(int player_color) const;
+
+     /*
+      * @brief マスの内容を取得
+      * @param x, y, z   座標
+      * @return int      COLOR_BLACK, COLOR_WHITE、または COLOR_EMPTY
+      /
+     int get_cell(int x, int y, int z) const noexcept;
+
+     /*
+      * @brief 指定したプレイヤーの石数をカウント
+      * @param player_color BLACK または WHITE
+      * @return int        その色の石の数
+      /
+     int count_pieces(int player_color) const;
+
+     /*
+      * @brief 両方の色をまとめて数える
+      * @return std::pair<int,int> {black_count, white_count}
+      /
+     std::pair<int, int> count_both() const;
+
+     /*
+      * @brief 盤面が埋まっているか確認
+      * @return true  全てのマスに石がある
+      /
+     bool is_full() const noexcept;
+
+     // ─── プライベートヘルパー ────────────────────────────────────────
+
+ private:
+     /* @brief 6 方向（±x, ±y, ±z）の全探索で挟み込みを検出し実行する/
+     std::vector<std::tuple<int,int,int>> flip_stones(int x, int y, int z, int player_color) const;
+
+     /* @brief 1 つの方向（dx,dy,dz）について探索を実行し、反転した石を返す/
+     std::vector<std::tuple<int,int,int>> flip_direction(
+         int dx, int dy, int dz, int x, int y, int z, int player_color) const;
+
+     /* @brief 指定した座標が盤面内か確認（境界チェック）/
+     bool is_valid(int x, int y, int z) const noexcept;
+
+     /* @brief 指定したマスの相手が誰かを返す（BLACK↔WHITE の入れ替え）/
+     int opponent(int player_color) const noexcept;
+
+     /* @brief レーヤーごとの明度変化を計算する（z≤1: DARKGRAY, z≥2: BLACK）*/
+     uint16_t get_stone_face_color(int z) const noexcept;
+
+ public:
+     // ─── メモバ（内部状態）───────────────────────────────────────
+     std::array<std::array<std::array<int, BOARD_SIZE>, BOARD_SIZE>, Z_LAYERS> grid_;  // [z][y][x] =
+ -1/0/1
+     int turn_{};
+ // -1/0/1
+     bool game_over_{};
+ // false
+     int result_code_{RESULT_CONTINUE};
+ // 0=継続中、1=DRAW、2=NO MOVES
+
+ public:
+     CubeBoard() = default;
+     ~CubeBoard() = default;
+ };
+
+ } // namespace cubeothello
+
+ 6. 設計レビューチェックリスト
+
+ 要件: 8×8×3 の立方体盤面
+ 実装位置: grid_[z][y][x]（board.hpp メモバ）
+ 備考: z=0..2 の 3 レーヤー
+ ────────────────────────────────────────
+ 要件: 初期配置：中心部 8 マス
+ 実装位置: initialize()
+ 備考: (x,y,z)∈{3,4}×{3,4}×{3,5} にチェスボード方式で配置
+ ────────────────────────────────────────
+ 要件: ターン交代ルール
+ 実装位置: GameEngine::run_loop()
+ 備考: 挟み込み後、ターンを反転させる
+ ────────────────────────────────────────
+ 要件: ゲーム終了条件
+ 実装位置: check_game_over()
+ 備考: 盤面埋まり（DRAW）または双方無手（NO MOVES）
+ ────────────────────────────────────────
+ 要件: 勝敗判定
+ 実装位置: count_pieces() + evaluate()
+ 備考: 石数が多い方が勝ち（AI の評価関数）
+ ────────────────────────────────────────
+ 要件: 挟み込み判定（6 方向）
+ 実装位置: flip_stones() → flip_direction()
+ 備考: ±x,±y,±z の全方向探索
+ ────────────────────────────────────────
+ 要件: DXLib 等角投影表示
+ 実装位置: Display::render_frame() / draw_cube_faces()
+ 備考: x:右下がり、y:左上がり、z:明度変化
+ ────────────────────────────────────────
+ 要件: 前面（z=0..1）＝明るい
+ 実装位置: get_stone_face_color(z) → COLOR_DARKGRAY
+ 備考:
+ ────────────────────────────────────────
+ 要件: 後面（z=2）＝暗い
+ 実装位置: get_stone_face_color(z) → COLOR_BLACK
+ 備考:

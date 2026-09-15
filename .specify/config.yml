@@ -1,0 +1,11 @@
+---
+name: "Cube Othello - C++ DXLib Implementation"
+description: "8x8x3 cube othello game with DXLib rendering and TDD-driven development"
+language: cpp17
+tech-stack: ["C++17", "DXLib", "gtest"]
+frameworks:
+  - name: dxlib
+    version: "^2.0"
+testing:
+  framework: gtest
+  coverage-target: 90%
