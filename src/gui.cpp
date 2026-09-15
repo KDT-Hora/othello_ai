@@ -1,408 +1,232 @@
-// Cube Othello — GUI Module (C++ / DxLib) v2.0
-// ============================================================================
-// DxLib を用いた等角投影による 3D グリッド描画。
-// ターミナルフォールバックモードも内蔵（DxLib が未リンクの場合）。
-
-#pragma once
-
-#include <array>
-#include <vector>
-#include <string>
+#include "include/dxlib_display.hpp"
 #include <cmath>
-#include "board.hpp"
-#include <windows.h>  // Win32 API for sound (simplified)
+#include <algorithm>
+#include <tuple>
 
-namespace cubo {
+namespace cubo_othello {
 
-constexpr int SCREEN_W = 800;
-constexpr int SCREEN_H = 600;
-constexpr float SCALE = 2.5f;
-constexpr int CENTER_X = SCREEN_W / 2;
-constexpr int CENTER_Y = SCREEN_H / 2;
+// ─── Rendering constants ────────────────────────────────────────────────────────
 
-// ============================================================================
-struct D3DPoint {
-    float x, y, z;   // 3D 座標（盤面座標）
-};
+constexpr float LIGHTING_CONSTANT = 0.3f;          // floor shadow limit
+constexpr int   CELL_SIZE = 8;                      // pixels per cell (small for 120×80)
+constexpr float ISOMETRIC_SCALE_X = 0.5f;           // x → projected-x scale
+constexpr float ISOMETRIC_SCALE_Y = 0.5f;           // y → projected-y scale
+constexpr float ISOMETRIC_SCALE_Z = 0.268f;         // z → depth offset
 
-// ============================================================================
-class CubeGridRenderer {
-public:
-    using BoardGrid = std::array<std::array<PieceColor, BOARD_SIZE>, BOARD_SIZE>;
+// ─── DXLibDisplay implementation ────────────────────────────────────────────────
 
-private:
-    const BoardGrid& board_;
-    bool dxlib_available_ = false;   // DxLib の利用可否
-    int screen_width_ = SCREEN_W;
-    int screen_height_ = SCREEN_H;
+bool DXLibDisplay::init(int width, int height) {
+    m_width = width > 0 ? width : 120;
+    m_height = height > 0 ? height : 80;
 
-public:
-    enum class RenderMode { DXLIB, TERMINAL };
-    RenderMode mode() const { return dxlib_available_ ? RenderMode::DXLIB : RenderMode::TERMINAL; }
-
-    CubeGridRenderer(const BoardGrid& board)
-        : board_(board), screen_width_(SCREEN_W), screen_height_(SCREEN_H) {}
-
-    // DxLib 描画（メイン）
-    void draw_dxlib() const {
-        if (!dxlib_available_) return;
-
-        // 背景クリア
-        DrawFilledRectangle(0, 0, screen_width_, screen_height_, RGB(15, 20, 35));
-
-        // ワイヤーフレーム（立方体の外枠）
-        draw_wireframe();
-
-        // 各面の描画
-        for (int face = 0; face < 6; ++face) {
-            float angle = static_cast<float>(face) * M_PI_F / 3.0f + 0.25f * M_PI_F;
-            draw_face(face, angle);
-        }
-
-        // 有効手の表示（+ マーク）
-        for (const auto& move : get_all_valid_moves()) {
-            int px = project_x(move[0]);
-            int py = project_y(move[2]);   // z 軸を y 方向に投影
-            DrawTextAt(px, py - 16, "+", RGB(50, 200, 50));
-        }
-
-        // UI パネル
-        update_ui_panel();
+    // Create DXLib window (RGB565 depth buffer for proper z-ordering of grid lines behind stones)
+    if (!DXOpen(m_width, m_height, "Cube Othello")) {
+        return false;   // failed to create window
     }
 
-    // ターミナルフォールバック描画（絵文字＋ANSI コード）
-    std::string render_terminal() const {
-        if (dxlib_available_) return {};   // DxLib ありの場合は空（メインで使うのは draw_dxlib）
+    // Set background color: deep slate (#1C1C2A)
+    DXSetBackColor(RGB(0x34, 0x34, 0x50));
 
-        std::string output;
-        for (int z = BOARD_SIZE - 1; z >= 0; --z) {
-            output += "[";
+    return true;
+}
+
+void DXLibDisplay::render_frame(const CubeBoard& board) {
+    // Clear screen to background color (DXLib redraws to backcolor if nothing drawn yet)
+    DXClear();
+
+    draw_cube_faces();   // wireframe cube faces first → behind stones
+    draw_grid();         // grid lines on top of wireframe
+    draw_stones(board);  // stones drawn last → occlude grid
+    mark_valid_moves(board, BLACK);
+    mark_valid_moves(board, WHITE);
+
+    // Render turn indicator & score overlay
+    DXSetColor(RGB(0x88, 0xBB, 0xFF));   // light blue text
+    DXDrawTextA("Turn: ", 2, 4, FONT_BOLD);
+    if (board.turn_ == BLACK) {
+        DXDrawTextA("BLACK", 16, 4, FONT_NORMAL);
+    } else {
+        DXDrawTextA("WHITE", 16, 4, FONT_NORMAL);
+    }
+
+    // Score overlay (simple text for now; can be enhanced with custom fonts later)
+    int black_count = board.count_pieces(BLACK);
+    int white_count = board.count_pieces(WHITE);
+    DXSetColor(RGB(0xFF, 0xBB, 0x88));   // light coral score text
+    char buf[64]{};
+
+    if (black_count == -1) {
+        sprintf(buf, "Black: ? | White: %d", white_count);
+    } else {
+        sprintf(buf, "Black: %d | White: %d", black_count, white_count);
+    }
+    DXDrawTextA(buf, 40, 56, FONT_NORMAL);
+
+    if (board.game_over()) {
+        DXSetColor(RGB(0xFF, 0x88, 0x88));   // red for game-over message
+        char msg[64]{};
+        sprintf(msg, "Game Over! %s", board.game_over() ? "Draw / No moves" : "");
+        DXDrawTextA(msg, 32, 72, FONT_BOLD);
+    }
+
+    // Handle input (ESC to quit)
+    handle_input();
+}
+
+void DXLibDisplay::draw_cube_faces() {
+    // Draw wireframe for all three visible faces:
+    //   • Front face  (y=0 plane in projected coords)
+    //   • Right face  (x=7 plane, drawn offset rightward)
+    //   • Top face    (z=0 plane, drawn offset upward)
+
+    constexpr int FACE_WIDTH = 48;   // ~6 cells wide (CELL_SIZE*6 ≈ 48px)
+    constexpr int FACE_HEIGHT = 32;  // ~4 cells tall
+
+    // Draw the three visible faces as wireframe rectangles (outline only, no fill)
+    const int outline_width = 1;
+    const int face_gap = 2;          // gap between faces for visual separation
+
+    // Front face: centered-left at x=0..FACE_WIDTH-1, y=-FACE_HEIGHT/2 .. +FACE_HEIGHT/2-1 (centered vertically)
+    const int front_x = m_width / 4;
+    const int front_y = -m_height / 4;
+    for (int i = 0; i < FACE_WIDTH; ++i) {
+        DXSetLineColor(RGB(0x88, 0xAA, 0xCC));   // light cyan wireframe
+        DXDrawLine(front_x + i*CELL_SIZE, front_y - FACE_HEIGHT/2, front_x + (i+1)*CELL_SIZE - CELL_SIZE, front_y - FACE_HEIGHT/2);
+    }
+
+    // Right face: offset right by (FACE_WIDTH + gap)
+    const int right_x = front_x + FACE_WIDTH + face_gap;
+    for (int i = 0; i < FACE_WIDTH; ++i) {
+        DXSetLineColor(RGB(0x88, 0xAA, 0xCC));
+        DXDrawLine(right_x + i*CELL_SIZE, front_y - FACE_HEIGHT/2, right_x + i*CELL_SIZE, front_y + FACE_HEIGHT/2);
+    }
+
+    // Top face: offset upward by (FACE_HEIGHT + gap)
+    const int top_y = front_y - FACE_HEIGHT - face_gap;
+    for (int i = 0; i < FACE_WIDTH; ++i) {
+        DXSetLineColor(RGB(0x88, 0xAA, 0xCC));
+        DXDrawLine(front_x + i*CELL_SIZE, top_y, front_x + i*CELL_SIZE, top_y + FACE_HEIGHT);
+    }
+}
+
+void DXLibDisplay::draw_grid() {
+    // Draw internal grid lines for the three visible faces.
+    // Grid lines run along x=const (vertical), y=const (horizontal) on each face.
+
+    constexpr int GRID_COLOR = RGB(0x55, 0x77, 99);   // medium blue-gray grid line
+
+    const float projected_x_per_cell = ISOMETRIC_SCALE_X;
+    const float projected_y_per_cell = ISOMETRIC_SCALE_Y;
+
+    for (int z = 0; z < Z_LAYERS; ++z) {
+        for (int y = 0; y < BOARD_SIZE; ++y) {
+            // Draw vertical grid lines (x-axis varies, y fixed) on this face layer
+            float px = -BOARD_SIZE / 2.0f * projected_x_per_cell + ISOMETRIC_SCALE_X * (float)(x=0);
             for (int x = 0; x < BOARD_SIZE; ++x) {
-                char ch = '.';
-                switch (board_[x][3][z]) {   // z=3（中心面）を表示
-                    case PieceColor::EMPTY: ch = '.'; break;
-                    case PieceColor::BLACK: ch = '⚫'; break;
-                    case PieceColor::WHITE:  ch = '⚪'; break;
-                }
-                output += ch;
-            }
-            output += "] (z=" + std::to_string(z) + ")\n";
-        }
-        return output;
-    }
+                // Draw vertical line along x-axis on the current y-layer:
+                DXSetLineColor(GRID_COLOR);
+                float px_left  = -BOARD_SIZE / 2.0f + ISOMETRIC_SCALE_X * (float)x;
+                float py_bottom = -BOARD_SIZE / 2.0f + ISOMETRIC_SCALE_Y * (float)y;
+                float py_top    = BOARD_SIZE / 2.0f + ISOMETRIC_SCALE_Y * (float)y;
 
-private:
-    static constexpr float PI_OVER_4 = 0.78539816f;   // π/4
+                // Map x coordinate to projected-x range [-48, +48] (≈ 6 cells × CELL_SIZE)
+                float left_px = -BOARD_SIZE / 2.0f * projected_x_per_cell + ISOMETRIC_SCALE_X * (float)x;
+                float right_px = -BOARD_SIZE / 2.0f * projected_x_per_cell + ISOMETRIC_SCALE_X * (float)(x+1);
 
-    D3DPoint project_point(int x, int y, int z) const {
-        float angle = M_PI_F / 4.0f + (static_cast<float>(z) - 4.0f) * PI_OVER_4;
-        return {
-            static_cast<int>((x - z) * SCALE * 128.f / BOARD_SIZE),   // x: 等角投影（横方向）
-            static_cast<int>((y + z) * SCALE * 64.f / BOARD_SIZE),    // y: 等角投影（縦方向、縮小）
-        };
-    }
-
-    int project_x(int x, int z) const { return (x - z) * SCALE; }
-    int project_y(int y, int z) const { return -(y + z) * SCALE / 2.0f; }
-
-    void draw_wireframe() const {
-        // 立方体の外枠（ワイヤーフレーム）
-        constexpr float thickness = 1.5f;   // ワイヤーの太さ
-
-        for (int x = 0; x <= BOARD_SIZE; ++x) {
-            int p1_x = project_point(x, 0, BOARD_SIZE - 1).x + CENTER_X;
-            int p1_y = project_point(x, 0, BOARD_SIZE - 1).y + CENTER_Y;
-            int p2_x = project_point(x, 0, 0).x + CENTER_X;
-            int p2_y = project_point(x, 0, 0).y + CENTER_Y;
-            DrawLine(p1_x, p1_y, p2_x, p2_y);   // 前面の底辺
-            DrawLine(p1_x, p1_y - SCALE * BOARD_SIZE / 2.0f, p2_x, p2_y - SCALE * BOARD_SIZE / 2.0f);
-        }
-
-        for (int z = 0; z <= BOARD_SIZE; ++z) {
-            int p1_x = project_point(BOARD_SIZE, BOARD_SIZE, z).x + CENTER_X;
-            int p1_y = project_point(BOARD_SIZE, BOARD_SIZE, z).y + CENTER_Y;
-            int p2_x = project_point(0, BOARD_SIZE, z).x + CENTER_X;
-            int p2_y = project_point(0, BOARD_SIZE, z).y + CENTER_Y;
-            DrawLine(p1_x, p1_y, p2_x, p2_y);   // 右面の底辺
-        }
-
-        for (int y = 0; y <= BOARD_SIZE; ++y) {
-            int p1_x = project_point(BOARD_SIZE, y, BOARD_SIZE - 1).x + CENTER_X;
-            int p1_y = project_point(BOARD_SIZE, y, BOARD_SIZE - 1).y + CENTER_Y;
-            int p2_x = project_point(0, y, BOARD_SIZE - 1).x + CENTER_X;
-            int p2_y = project_point(0, y, BOARD_SIZE - 1).y + CENTER_Y;
-            DrawLine(p1_x, p1_y, p2_x, p2_y);   // 右面の頂辺
-        }
-
-        // 前面のグリッド線（x 方向）
-        for (int i = 0; i < BOARD_SIZE - 1; ++i) {
-            int px_front = CENTER_X + project_point(i, 4, 0).x;   // y=4 を中心として
-            int py_front = CENTER_Y - project_point(3, i, 0).y;   // x=3 を中心として
-            int p1_x = px_front - SCALE * BOARD_SIZE / 2.0f + (i == 0 ? 0 : SCALE);
-            int p1_y = py_front;
-            int p2_x = px_front + SCALE * BOARD_SIZE / 2.0f - (i == BOARD_SIZE - 2 ? 0 : SCALE);
-            int p2_y = py_front;
-            DrawLine(p1_x, p1_y, p2_x, p2_y);
-        }
-
-        // 右面のグリッド線（z 方向）
-        for (int i = 0; i < BOARD_SIZE - 1; ++i) {
-            int px_right = CENTER_X + project_point(BOARD_SIZE, 4, i).x;
-            int py_right = CENTER_Y - project_point(3, 4, i).y;
-            int p1_x = px_right + SCALE * BOARD_SIZE / 2.0f;
-            int p1_y = py_right + (i == 0 ? 0 : -SCALE);
-            int p2_x = px_right + SCALE * BOARD_SIZE / 2.0f;
-            int p2_y = py_right + (i == BOARD_SIZE - 2 ? 0 : -SCALE);
-            DrawLine(p1_x, p1_y, p2_x, p2_y);
-        }
-
-        // 左面のグリッド線（x 方向、裏側）
-        for (int i = 0; i < BOARD_SIZE - 1; ++i) {
-            int px_left = CENTER_X + project_point(i, BOARD_SIZE - 1, 0).x;
-            int py_left = CENTER_Y - project_point(3, BOARD_SIZE - 1, 0).y;
-            int p1_x = px_left - SCALE * BOARD_SIZE / 2.0f + (i == 0 ? 0 : SCALE);
-            int p1_y = py_left;
-            int p2_x = px_left - SCALE * BOARD_SIZE / 2.0f - (i == BOARD_SIZE - 2 ? 0 : SCALE);
-            int p2_y = py_left;
-            DrawLine(p1_x, p1_y, p2_x, p2_y);
-        }
-
-        // 後面のグリッド線（z 方向、裏側）
-        for (int i = 0; i < BOARD_SIZE - 1; ++i) {
-            int px_back = CENTER_X + project_point(BOARD_SIZE, BOARD_SIZE - 1, i).x;
-            int py_back = CENTER_Y - project_point(3, BOARD_SIZE - 1, i).y;
-            int p1_x = px_back + SCALE * BOARD_SIZE / 2.0f;
-            int p1_y = py_back + (i == 0 ? 0 : -SCALE);
-            int p2_x = px_back + SCALE * BOARD_SIZE / 2.0f;
-            int p2_y = py_back + (i == BOARD_SIZE - 2 ? 0 : -SCALE);
-            DrawLine(p1_x, p1_y, p2_x, p2_y);
-        }
-    }
-
-    void draw_face(int face, float angle) const {
-        // 面の中心角を計算（等角投影）
-        float cx = cosf(angle) * SCALE;
-        float cy = -sinf(angle) * SCALE / 2.0f;
-        int center_x = static_cast<int>(cx * BOARD_SIZE / 2.0f + CENTER_X);
-        int center_y = static_cast<int>(CENTER_Y - cy * BOARD_SIZE / 2.0f);
-
-        // ワイヤーライン（面の枠）
-        float thickness = (face % 2 == 0) ? 1.0f : 1.5f;   // 前後は細く、左右は太く
-        DrawLine(center_x - SCALE * BOARD_SIZE / 2.0f, center_y,
-                 center_x + SCALE * BOARD_SIZE / 2.0f, center_y, thickness);
-        DrawLine(center_x, center_y - SCALE * BOARD_SIZE / 4.0f, center_x, center_y + SCALE * BOARD_SIZE / 4.0f, thickness);
-
-        // 石の描画（円形＋明度グラデーション）
-        for (int x = 0; x < BOARD_SIZE; ++x) {
-            for (int y = 0; y < BOARD_SIZE; ++y) {
-                int px = center_x + project_point(x, y, 3).x;   // z=3（中心面）を表示
-                int py = center_y - project_point(3, y, 3).y;
-
-                PieceColor color = board_[x][y][3];   // z=3 面の石色
-
-                if (color == PieceColor::EMPTY) continue;
-
-                // 明度グラデーション：z が小さいほど暗く、大きいほど明るく
-                float brightness = static_cast<float>(4 - z_of_face(face)) / 4.0f * 255.f;
-                int gray = (color == PieceColor::BLACK) ?
-                          static_cast<int>(60 + (brightness * 30.f / 255.f)) :
-                          static_cast<int>(240 - brightness);
-
-                // 黒石：暗い茶色（グラデーション）
-                if (color == PieceColor::BLACK) {
-                    DrawCircleFilled(px, py, 10, RGB(gray + 30, gray + 15, 40));   // 茶色系
-                    // 「+」マークの簡易描画（空いている場合）
-                    if (is_valid_move_at(x, y)) {
-                        DrawTextAt(px - 8, py - 16, "+", RGB(200, 240, 200));
-                    }
-                } else {   // WHITE: 白系
-                    DrawCircleFilled(px, py, 9, RGB(gray, gray, gray));
-                    if (is_valid_move_at(x, y)) {
-                        DrawTextAt(px - 8, py - 16, "+", RGB(200, 240, 200));
-                    }
-                }
-
-                // z 軸による明度変化（立体感）
-                int z_index = (face == 3) ? BOARD_SIZE - 1 : (BOARD_SIZE / 2);   // 簡易：中心面を明るく
-                float depth_factor = static_cast<float>(z_index) / (BOARD_SIZE - 1.0f);
-                if (depth_factor > 0.5f && color == PieceColor::BLACK) {
-                    DrawCircle(px, py, 4, RGB(gray + 20, gray + 10, 30));   // ハイライト（内側）
-                } else if (depth_factor < 0.5f && color == PieceColor::WHITE) {
-                    DrawCircle(px - 2, py + 2, 4, RGB(gray + 10, gray + 10, gray + 10));   // シャドウ（外側）
-                }
+                // For y-axis lines, draw along the entire height of this face at fixed x
+                DXDrawLine(left_px, py_bottom, left_px, py_top);
             }
         }
     }
+}
 
-    bool is_valid_move_at(int x, int y) const {
-        for (int z = 0; z < BOARD_SIZE; ++z) {
-            if (!board_[x][y][z]) continue;   // 埋まっているなら置けない
-            auto flipped = board_.flip_stones(x, y, z, PieceColor::BLACK);
-            if (!flipped.empty()) return true;
-        }
-        return false;
-    }
+void DXLibDisplay::draw_stones(const CubeBoard& board) {
+    // Render each cell (x,y,z) as an ellipse with depth-based lighting.
+    // Lighting formula: light = max(0.3f, 1.0f - z/7.0*0.5f)
 
-    void draw_pieces() const {
-        for (int x = 0; x < BOARD_SIZE; ++x) {
-            for (int y = 0; y < BOARD_SIZE; ++y) {
-                PieceColor color = board_[x][y][3];   // z=3（中心面）のみを表示
-                if (color == PieceColor::EMPTY) continue;
+    const float projected_x_per_cell = ISOMETRIC_SCALE_X;
+    const float projected_y_per_cell = ISOMETRIC_SCALE_Y;
 
-                int px = CENTER_X + project_point(x, y, 3).x;
-                int py = CENTER_Y - project_point(3, y, 3).y;
+    for (int z = 0; z < Z_LAYERS; ++z) {
+        for (int y = 0; y < BOARD_SIZE; ++y) {
+            for (int x = 0; x < BOARD_SIZE; ++x) {
+                int color_code = board.grid_[x][y][z];
 
-                PieceColor color2 = board_[x][y][0];   // z=0（前面）の石色も考慮
-                if (color2 == PieceColor::BLACK) {
-                    DrawCircleFilled(px, py, 10, RGB(65, 45, 25));   // 暗い茶色
-                } else if (color2 == PieceColor::WHITE) {
-                    DrawCircleFilled(px, py, 9, RGB(235, 235, 235));   // 白＋少しグレー
+                // Compute lighting factor: front-facing cells brightest, back-face darkest (~0.29)
+                float light_factor = std::max(0.3f, 1.0f - static_cast<float>(z)/7.0f*0.5f);
+
+                int fill_rgb[3]{};
+                int stroke_rgb[3]{};
+
+                if (color_code == EMPTY) {
+                    // Empty cell: light gray dot
+                    fill_rgb = {0xAAAAAA, 0xAAAAAA, 0xAAAAAA};   // ~70% gray
+                    stroke_rgb = {0xCCCCCC, 0xCCCCCC, 0xCCCCCC}; // slightly lighter outline
+                } else if (color_code == BLACK) {
+                    // Black stone: dark slate (#3a4a5e) with darker stroke
+                    fill_rgb = {static_cast<int>(0x3a * light_factor), static_cast<int>(0x4a * light_factor), static_cast<int>(0x5e * light_factor)};
+                    stroke_rgb = {static_cast<int>(0x2a * (light_factor+0.1f)), static_cast<int>(0x3a * (light_factor+0.1f)), static_cast<int>(0x46 * (light_factor+0.1f))};
+                } else { // WHITE
+                    // White stone: off-white (#f0f0f5) with lighter stroke
+                    fill_rgb = {(int)(240*light_factor), (int)(240*light_factor), (int)(243*light_factor)};
+                    stroke_rgb = {(int)(160*light_factor), (int)(160*light_factor), (int)(165*light_factor)};
                 }
 
-                // 「+」マークの描画（有効手の場合）
-                if (is_valid_move_at(x, y)) {
-                    DrawTextAt(px - 8, py - 16, "+", RGB(100, 220, 100));
-                }
+                // Project cell center to 2D screen coordinates
+                float px = -BOARD_SIZE / 2.0f * projected_x_per_cell + ISOMETRIC_SCALE_X * static_cast<float>(x);
+                float py = -BOARD_SIZE / 2.0f * projected_y_per_cell + ISOMETRIC_SCALE_Y * static_cast<float>(y)
+                        + ISOMETRIC_SCALE_Z * static_cast<float>(z);   // z adds upward offset for pseudo-3D
 
-                // z 軸による明度変化（立体感表現）
-                float brightness = (color == PieceColor::BLACK) ? 70.0f : 245.0f;
-                DrawCircle(px - 3, py + 3, 8, RGB(static_cast<int>(brightness), static_cast<int>(brightness), static_cast<int>(brightness)));   // ハイライト
+                // Draw filled ellipse (stone body)
+                int r = CELL_SIZE / 2;
+                DXSetFillColor(fill_rgb[0], fill_rgb[1], fill_rgb[2]);
+                DXFillEllipse(px + static_cast<float>(r), py, static_cast<float>(r));
+
+                // Draw stroke outline
+                DXSetLineColor(stroke_rgb[0], stroke_rgb[1], stroke_rgb[2]);
+                DXDrawEllipse(px + static_cast<float>(r), py, static_cast<float>(r));
+
+                // Optionally draw inner letter (B/W) — only if needed for clarity
             }
         }
     }
+}
 
-    void update_ui_panel() const {
-        if (!dxlib_available_) return;
+void DXLibDisplay::mark_valid_moves(const CubeBoard& board, int color) {
+    auto valid = board.get_valid_moves(color);
+    const float projected_x_per_cell = ISOMETRIC_SCALE_X;
+    const float projected_y_per_cell = ISOMETRIC_SCALE_Y;
 
-        // UI パネル背景（右下）
-        DrawFilledRectangle(0, SCREEN_H - 48, SCREEN_W, 48, RGB(35, 45, 65));
-        DrawTextAt(12, SCREEN_H - 18, "Cube Othello v0.1", RGB(200, 200, 200), 16);
+    for (const auto& pos : valid) {
+        int x = std::get<0>(pos), y = std::get<1>(pos), z = std::get<2>(pos);
 
-        // ターン表示
-        int turn_color = (get_turn_player() == BLACK) ? RGB(255, 230, 180) : RGB(180, 200, 255);
-        DrawTextAt(12, SCREEN_H - 4, "Turn: ", RGB(200, 200, 200), 16);
-        std::string turn_str = (get_turn_player() == BLACK) ? "[BLACK]" : "[WHITE]";
-        DrawTextAt(75, SCREEN_H - 4, turn_str.c_str(), turn_color, 16);
+        // Project to 2D screen coordinates
+        float px = -BOARD_SIZE / 2.0f * projected_x_per_cell + ISOMETRIC_SCALE_X * static_cast<float>(x);
+        float py = -BOARD_SIZE / 2.0f * projected_y_per_cell + ISOMETRIC_SCALE_Y * static_cast<float>(y)
+                + ISOMETRIC_SCALE_Z * static_cast<float>(z);
 
-        // スコア表示
-        int black_count = count_pieces(PieceColor::BLACK);
-        int white_count = count_pieces(PieceColor::WHITE);
-        std::string score_str = "Score: B=" + std::to_string(black_count) + "/W=" + std::to_string(white_count);
-        DrawTextAt(12, SCREEN_H - 22, score_str.c_str(), RGB(200, 200, 200), 16);
+        // Draw bright green "+" marker above the cell center
+        DXSetTextColor(RGB(0x00, 0xFF, 0x88));   // vivid lime-green
+        int font_size = FONT_NORMAL;
+        float text_x = px + CELL_SIZE / 2.0f - 1.5f*CELL_SIZE/4.f;   // center horizontally
+        float text_y = py - 3.0f * CELL_SIZE / 8.f;                  // slightly above cell
 
-        // ゲーム終了時の表示
-        if (is_game_over()) {
-            char winner = get_winner();
-            std::string result = "Winner: " + (winner == 'B' ? "BLACK" : (winner == 'W' ? "WHITE" : "DRAW"));
-            DrawTextAt(12, SCREEN_H - 36, result.c_str(), RGB(255, 100, 80), 20);
-        }
+        DXDrawTextA("+", (int)(text_x), (int)text_y, font_size);
+    }
+}
+
+bool DXLibDisplay::handle_input() {
+    int key = DXGetKey();
+
+    if (key == KEY_ESCAPE) {
+        DXClose();   // shut down DXLib window cleanly
+        return false;   // tell caller: exit game loop
+    } else if (key == 'r' || key == 'R') {
+        // Reset board to initial state without ending the game
+        // Called via GameEngine wrapper later.
     }
 
-public:
-    // Board クラスからのメソッド参照（簡易なインターフェース）
-    static int get_turn_player() { return 0; }   // プレイヤークラスから渡す必要があるが、簡易版では無視
-    static bool is_game_over() { return false; }
-    static PieceColorPieceColor count_pieces(PieceColor color) { return 0; }
+    return true;   // continue rendering loop on next tick
+}
 
-    // 簡易インターフェース：実際の使用時は GameEngine から呼び出す
-    void draw_with_engine(GameEngine& engine) const {
-        if (!dxlib_available_) {
-            auto terminal_output = render_terminal();
-            printf("%s\n", terminal_output.c_str());
-            return;
-        }
-
-        DrawFilledRectangle(0, 0, screen_width_, screen_height_, RGB(15, 20, 35));
-
-        // ゲーム状態から盤面を取得して描画
-        const auto& board = engine.get_board();
-        draw_wireframe_for_engine(engine);   // ワイヤーフレーム（簡易：全体を黒い枠）
-        draw_pieces_with_engine(board, engine);
-    }
-};
-
-// ============================================================================
-class GameGUI {
-public:
-    using BoardGrid = std::array<std::array<PieceColor, BOARD_SIZE>, BOARD_SIZE>;
-
-private:
-    CubeBoard board_;
-    PieceColor turn_player_ = BLACK;   // 黒が先攻（black-on-white）
-    bool game_over_ = false;
-    char winner_ = '.';
-    CuboGridRenderer renderer{board_.board_};   // コンストラクタで初期化
-
-public:
-    GameGUI() : board_{} {
-        board_.initialize();   // 初期配置（黒・白を隣り合うように配置）
-    }
-
-    int main_loop() {
-        if (!dxlib_available_) {
-            auto output = renderer.render_terminal();
-            printf("%s\n", output.c_str());
-            return EXIT_SUCCESS;
-        }
-
-        // DxLib メインループ
-        while (true) {   // 簡易：終了条件はゲームオーバーのみ（実際の DxLib では DrawWaitInputRet で待機）
-            draw();
-
-            if (is_game_over()) break;
-
-            // キーボード入力処理
-            handle_input();
-        }
-
-        return EXIT_SUCCESS;
-    }
-
-private:
-    void draw() const {
-        renderer.draw_dxlib();   // DxLib モード：ワイヤーフレーム＋石の描画＋有効手表示
-    }
-
-    void handle_input() {
-        if (game_over_) return;
-
-        // キーボード入力（簡易）
-        int key = GetAsyncKeyState(VK_ESCAPE) ? VK_ESCAPE : 0;
-        if (key == VK_ESCAPE) {
-            // アプリ終了
-            return;
-        }
-
-        // 有効手の選択（キー入力またはマウスクリック）
-        auto valid_moves = engine.get_valid_moves();   // GameEngine から取得
-        if (!valid_moves.empty()) {
-            int move_x, move_y, move_z;
-            // キー入力で座標を決定（簡易：数字入力）
-            char input[16];
-            GetKeyboardBuffer(input);
-
-            // 簡易パース：キーボードからの数値入力を受け付ける場合、
-            //   '1'...'7','8' → x, y, z の指定
-            if (input[0] >= '1' && input[0] <= '9') {
-                int digit = input[0] - '1';
-                move_x = 3 + (digit / 2);   // x: 3 または 4
-                move_y = 3 + (digit % 2);    // y: 3 または 4
-                move_z = 3;                   // z=3（中心面）をデフォルト
-            } else {
-                // マウスクリック処理（簡易：座標→盤面マスの変換）
-                int mouse_x, mouse_y;
-                GetMousePosition(&mouse_x, &mouse_y);
-
-                float angle = M_PI_F / 4.0f;   // 等角投影の角度
-                D3DPoint projected = project_point(mouse_x, mouse_y);
-                move_x = static_cast<int>((projected.x - CENTER_X) * BOARD_SIZE / SCALE + BOARD_SIZE / 2);
-                move_y = static_cast<int>(((CENTER_Y - projected.y) * BOARD_SIZE / (SCALE * 2)) + BOARD_SIZE / 2);
-            }
-
-            // ゲームプレイの実行
-            auto result = engine.play_move(move_x, move_y, move_z);
-        }
-    }
-};
-
-} // namespace cubo
+} // namespace cubo_othello

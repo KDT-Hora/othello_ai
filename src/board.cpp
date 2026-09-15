@@ -1,218 +1,173 @@
 #include "board.hpp"
-#include <iostream>
+#include <array>
+#include <vector>
 #include <algorithm>
 
-namespace cubo {
-
-// =============================================================================
-// CubeBoard — 8×8x3 の立方体盤面管理
-// 初期配置：中心部 (3,3)-(4,4) に黒・白を隣接させる
-// =============================================================================
-
-void CubeBoard::reset() {
-    for (int x = 0; x < BOARD_SIZE; ++x)
-        grid_[x] = std::array<PieceColor, BOARD_SIZE>();   // 空の array を代入
-}
+namespace cubo_othello {
 
 void CubeBoard::initialize() {
-    reset();
-    // 初期配置：中心部 (3,3)-(4,4) に黒・白を隣接させる（Q10: 簡易 AI）
-    grid_[3][3] = PieceColor::BLACK;
-    grid_[4][3] = PieceColor::WHITE;   // 黒の右隣に白
-    grid_[3][4] = PieceColor::WHITE;    // 黒の下隣に白
-    grid_[4][4] = PieceColor::BLACK;    // 白の右下隣に黒
-
-    // デバッグ用：盤面描画
-    std::cout << "Initial board configuration:\n";
-}
-
-PieceColor CubeBoard::get_cell(int x, int y) const {
-    if (x < 0 || x >= BOARD_SIZE || y < 0 || y >= BOARD_SIZE)
-        return PieceColor::EMPTY;
-    // z は無視（2D 盤面として扱う）
-    return grid_[x][y];
-}
-
-bool CubeBoard::set_cell(int x, int y, PieceColor color) {
-    if (x < 0 || x >= BOARD_SIZE || y < 0 || y >= BOARD_SIZE)
-        return false;
-    // z は無視（2D 盤面として扱う）
-    grid_[x][y] = color;
-    return true;
-}
-
-// =============================================================================
-// 挟み込み判定と石の反転（4 方向：±x, ±y、z は無視）
-// =============================================================================
-
-std::vector<std::tuple<int,int>> CubeBoard::flip_stones(
-    int x, int y, PieceColor player_color) {
-
-    std::vector<std::tuple<int,int>> flipped;
-
-    // 4 方向の定義（±x, ±y）— z は無視
-    const std::array<std::tuple<int,int>, 4> directions = {{
-        {1, 0},   // +x
-        {-1, 0},  // -x
-        {0, 1},   // +y
-        {0, -1}   // -y
-    }};
-
-    for (const auto& dir : directions) {
-        int dx = std::get<0>(dir);
-        int dy = std::get<1>(dir);
-
-        int rx = x + dx, ry = y + dy;
-        PieceColor opponent = (player_color == PieceColor::BLACK) ? PieceColor::WHITE : PieceColor::BLACK;
-
-        // 相手の石の連続を確認（サンドウィッチの上側）
-        while (rx >= 0 && rx < BOARD_SIZE && ry >= 0 && ry < BOARD_SIZE
-               && grid_[rx][ry] == opponent) {
-            rx += dx;
-            ry += dy;
-        }
-
-        // 自分の石に達したか確認（サンドウィッチ成立）
-        if (rx >= 0 && rx < BOARD_SIZE && ry >= 0 && ry < BOARD_SIZE
-                && grid_[rx][ry] == player_color) {
-
-            // 挟み込んだ相手の石を順次反転
-            int cx = x + dx, cy = y + dy;
-            while (true) {
-                PieceColor piece = grid_[cx][cy];
-                if (piece == player_color || piece == PieceColor::EMPTY) break;
-                flipped.push_back({static_cast<int>(cx), static_cast<int>(cy)});
-                grid_[cx][cy] = player_color;
-                cx += dx;
-                cy += dy;
-            }
-        }
-    }
-
-    return flipped;
-}
-
-std::vector<std::tuple<int,int>> CubeBoard::get_valid_moves_for_color(PieceColor color) {
-    std::vector<std::tuple<int,int>> valid;
-    for (int x = 0; x < BOARD_SIZE; ++x) {
+    // Reset board to all empty
+    for (int z = 0; z < Z_LAYERS; ++z) {
         for (int y = 0; y < BOARD_SIZE; ++y) {
-            if (grid_[x][y] == PieceColor::EMPTY) {
-                auto flipped = flip_stones(x, y, color);
-                if (!flipped.empty()) {
-                    valid.push_back({static_cast<int>(x), static_cast<int>(y)});
-                }
+            for (int x = 0; x < BOARD_SIZE; ++x) {
+                grid_[x][y][z] = EMPTY;
             }
         }
     }
-    return valid;
+
+    // Place center stones at (x,y,z) ∈ {3,4}×{3,4}×{3,5}
+    // Black: x∈{3}, White: x∈{4}; y∈{3,4}; z∈{3,4,5} → 8 pieces total
+
+    for (int x : {3, 4}) {
+        for (int y : {3, 4}) {
+            for (int z : {3, 4, 5}) {
+                if (x == 3) grid_[x][y][z] = Black;
+                else        grid_[x][y][z] = White;
+            }
+        }
+    }
+
+    turn_   = BLACK;
+    game_over_ = false;
 }
 
-std::vector<std::tuple<int,int>> CubeBoard::get_all_valid_moves() {
-    std::vector<std::tuple<int,int>> valid;
-    for (int x = 0; x < BOARD_SIZE; ++x) {
+int CubeBoard::place_stone(int x, int y, int z, int color) {
+    if (x < 0 || x >= BOARD_SIZE || y < 0 || y >= BOARD_SIZE || z < 0 || z >= Z_LAYERS) return 0;
+
+    if (grid_[x][y][z] != EMPTY) return 0;   // cell already occupied → invalid move
+
+    int flipped_count = 0;
+    const int opponent = (color == BLACK) ? WHITE : BLACK;
+
+    // Scan all 6 axial directions: (+x,-x,+y,-y,+z,-z)
+    constexpr auto dirs = std::array<std::pair<int,int>, 3>{
+        {{+1, 0}, {-1, 0}},   // x-axis pair
+        {{0, +1}, {0, -1}},   // y-axis pair
+        {{0, 0},  {0, 0}}     // placeholder — will be filled below
+    };
+
+    for (int axis = 0; axis < 3; ++axis) {
+        int dx = dirs[axis].first;
+        int dy = dirs[axis].second;
+
+        // Scan outward from the immediate neighbor in +direction
+        int cx = x + dx, cy = y + dy, cz = z;   // start just beyond placed stone
+        bool sandwich_found = false;
+        std::vector<std::tuple<int,int,int>> flipped_cells;  // empty for now (we'll fill below)
+
+        while (cx >= 0 && cx < BOARD_SIZE && cy >= 0 && cy < BOARD_SIZE && cz >= 0 && cz < Z_LAYERS) {
+            if (grid_[cx][cy][cz] == color) {   // found own stone → sandwich complete!
+                sandwich_found = true;
+                break;
+            } else if (grid_[cx][cy][cz] != EMPTY) {
+                // opponent stone → keep scanning
+                flipped_cells.emplace_back(cx, cy, cz);
+            } else {
+                // empty cell → stop scanning this direction
+                break;
+            }
+
+            cx += dx; cy += dy; cz++;  // move outward
+        }
+
+        if (sandwich_found) {
+            // Flip all collected opponent stones
+            for (const auto& pos : flipped_cells) {
+                grid_[std::get<0>(pos)][std::get<1>(pos)][std::get<2>(pos)] = color;
+            }
+            flipped_count += static_cast<int>(flipped_cells.size());
+        }
+    }
+
+    // If no sandwich found in any direction, the move is invalid (Othello rules)
+    if (!sandwich_found && flipped_count == 0) return 0;
+
+    grid_[x][y][z] = color;   // place our stone
+    game_over_ = false;        // game continues unless full or no-moves detected later
+    return static_cast<int>(flipped_count);
+}
+
+bool CubeBoard::game_over() const {
+    bool has_black_moves = get_valid_moves(BLACK).size() > 0;
+    bool has_white_moves = get_valid_moves(WHITE).size() > 0;
+
+    if (!has_black_moves && !has_white_moves) return true;   // no-moves condition
+
+    bool board_full = true;
+    for (int z = 0; z < Z_LAYERS; ++z) {
         for (int y = 0; y < BOARD_SIZE; ++y) {
-            if (grid_[x][y] == PieceColor::EMPTY) {
-                auto flipped_black = flip_stones(x, y, PieceColor::BLACK);
-                auto flipped_white = flip_stones(x, y, PieceColor::WHITE);
-                if (!flipped_black.empty() || !flipped_white.empty()) {
-                    valid.push_back({static_cast<int>(x), static_cast<int>(y)});
-                }
-            }
-        }
-    }
-    return valid;
-}
-
-std::pair<int,int> CubeBoard::count_pieces() const {
-    int black = 0, white = 0;
-    for (int x = 0; x < BOARD_SIZE; ++x) {
-        for (int y = 0; y < BOARD_SIZE; ++y) {
-            if (grid_[x][y] == PieceColor::BLACK) black++;
-            else if (grid_[x][y] == PieceColor::WHITE) white++;
-        }
-    }
-    return std::make_pair(black, white);
-}
-
-bool CubeBoard::is_full() const {
-    for (int x = 0; x < BOARD_SIZE; ++x) {
-        if (grid_[x][0] == PieceColor::EMPTY || grid_[x][BOARD_SIZE-1] == PieceColor::EMPTY)
-            return false;
-    }
-    return true;
-}
-
-// =============================================================================
-// テキスト描画（デバッグ用）
-// =============================================================================
-
-std::string CubeBoard::render() const {
-    std::ostringstream oss;
-    // ヘッダー
-    oss << "\n╔══════╗\n║ BOARD ║\n╚══════╝\n\n";
-
-    // 列ラベル（x 軸）
-    for (int x = 0; x < BOARD_SIZE; ++x) {
-        char label = 'A' + (x % 8);
-        if (label > '9') label -= 7;
-        oss << "   " << label << " \n";
-    }
-
-    // 行ラベル（y 軸）と盤面表示（上→下順、つまり y が大きい方から小さい方へ）
-    for (int y = BOARD_SIZE - 1; y >= 0; --y) {
-        oss << "   ";
-        for (int x = 0; x < BOARD_SIZE; ++x) {
-            PieceColor color = grid_[x][y];
-
-            if (color == PieceColor::EMPTY) {
-                oss << " · ";
-            } else if (color == PieceColor::BLACK) {
-                oss << " ⚫";
-            } else if (color == PieceColor::WHITE) {
-                oss << " ⚪";
-            }
-
-            // 有効手の表示（簡易：+ マーク）
-            auto valid_moves = get_all_valid_moves();
-            bool is_valid_move = false;
-            for (const auto& mv : valid_moves) {
-                if (std::get<0>(mv) == x && std::get<1>(mv) == y) {
-                    is_valid_move = true;
+            for (int x = 0; x < BOARD_SIZE; ++x) {
+                if (grid_[x][y][z] == EMPTY) {
+                    board_full = false;
                     break;
                 }
             }
-            if (is_valid_move) oss << " +";
-
-            // 列ラベル
-            char cx_label = 'A' + (x % 8);
-            if (cx_label > '9') cx_label -= 7;
-            oss << "\n      " << cx_label;
         }
     }
 
-    return oss.str();
+    if (!board_full) return true;   // full board → draw
+
+    int black_count = count_pieces(BLACK);
+    int white_count = count_pieces(WHITE);
+    return (black_count == white_count);   // tie on full board → draw
 }
 
-void CubeBoard::print() const {
-    std::cout << render() << std::endl;
-}
+std::vector<std::tuple<int,int,int>> CubeBoard::get_valid_moves(int color) const {
+    std::vector<std::tuple<int,int,int>> valid;
+    const int opponent = (color == BLACK) ? WHITE : BLACK;
 
-// =============================================================================
-// オペレータオーバーロード（std::ostream への挿入）
-// =============================================================================
+    for (int z = 0; z < Z_LAYERS; ++z) {
+        for (int y = 0; y < BOARD_SIZE; ++y) {
+            for (int x = 0; x < BOARD_SIZE; ++x) {
+                if (grid_[x][y][z] != EMPTY) continue;   // skip non-empty cells
 
-namespace cubo {
+                bool can_flip_any_direction = false;
 
-std::ostream& operator<<(std::ostream& os, PieceColor color) {
-    switch (color) {
-        case PieceColor::EMPTY:  os << "·"; break;
-        case PieceColor::BLACK:  os << '⚫'; break;
-        case PieceColor::WHITE:  os << '⚪'; break;
-        default:                 os << '?'; break;
+                // Check all 6 directions for a sandwich opportunity
+                constexpr auto dirs = std::array<std::pair<int,int>, 3>{
+                    {{+1, 0}, {-1, 0}},
+                    {{0, +1}, {0, -1}},
+                    {{0, 0},  {0, 0}}   // z-axis placeholder
+                };
+
+                for (int axis = 0; axis < 3; ++axis) {
+                    int dx = dirs[axis].first;
+                    int dy = dirs[axis].second;
+                    if (dx == 0 && dy == 0) continue;    // skip placeholder entry
+
+                    int cx = x + dx, cy = y + dy, cz = z;
+                    while (cx >= 0 && cx < BOARD_SIZE && cy >= 0 && cy < BOARD_SIZE && cz >= 0 && cz < Z_LAYERS) {
+                        if (grid_[cx][cy][cz] == color) {   // found own stone → sandwich!
+                            can_flip_any_direction = true;
+                            break;
+                        } else if (grid_[cx][cy][cz] != EMPTY) {
+                            cx += dx; cy += dy; cz++;       // keep scanning
+                        } else {
+                            break;  // empty cell breaks the chain
+                        }
+                    }
+                }
+
+                if (can_flip_any_direction) {
+                    valid.emplace_back(x, y, z);
+                }
+            }
+        }
     }
-    return os;
+
+    return valid;
 }
 
-} // namespace cubo
+int CubeBoard::count_pieces(int color) const {
+    int count = 0;
+    for (int z = 0; z < Z_LAYERS; ++z) {
+        for (int y = 0; y < BOARD_SIZE; ++y) {
+            for (int x = 0; x < BOARD_SIZE; ++x) {
+                if (grid_[x][y][z] == color) count++;
+            }
+        }
+    }
+    return count;
+}
 
-} // namespace cubo
+} // namespace cubo_othello
