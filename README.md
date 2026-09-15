@@ -1,51 +1,64 @@
-# Cube Othello (8x8x3) — Terminal Fallback Mode
+# Cube Othello (8×8×8) — C++20 / DXLib
 
-A minimal C++17 implementation of the 3D cube othello game, rendered in a terminal with ASCII characters. This project demonstrates a flat-plane display approach and simple minimax AI for accessibility on low-resource environments.
+3D 拡張オセロ。8×8×8 の立方体（512マス）上で、6軸方向（±x,±y,±z）の挟み込みでプレイする。
+盤面ロジック + 深さ3のミニマックス AI + DXLib による平面等角投影レンダリングで構成される。
+詳細な仕様は [`specs/cubo-othello/spec.md`](specs/cubo-othello/spec.md) を参照。
 
-**Q9 / A**: The board is displayed as a **flat 2D grid** using an oblique projection — no z-index layering or depth-based occlusion is rendered. Each cell at `(x, y)` is simply colored black (`B`) or white (`W`), ignoring the third dimension `z`.
-
-**Q10 / A**: The AI uses a **very simple minimax** with evaluation function = (my stones − opponent's stones), search depth limited to 2 plies. No lookahead beyond stone-count comparison is performed.
-
----
-
-## 📁 Project Structure
+## 📁 プロジェクト構成
 
 ```
-project-cubo_othello/
-├── CMakeLists.txt          # CMake build configuration
-├── README.md               # This file
-├── requirements.txt        # Test dependencies (pytest, numpy)
-└── src/
-    ├── board.hpp           # CubeBoard + SimpleAI class definitions
-    └── game_engine.hpp     # GameEngine controller class
+CMakeLists.txt         # ビルド設定 (C++20 / vcpkg manifest / DXLib)
+vcpkg.json              # vcpkg 依存関係 (gtest)
+src/
+  board.hpp/.cpp        # CubeBoard — 盤面状態とルール（純粋ロジック、DXLib非依存）
+  ai_player.hpp/.cpp     # SimpleAI — 深さ限定ミニマックス（枝刈りなし、石数差評価）
+  display.hpp/.cpp       # DXLibDisplay — 平面等角投影レンダリング + 入力処理
+  game_engine.hpp/.cpp   # GameEngine — 手番管理・パス判定・メインループ
+  main.cpp               # WinMain エントリポイント
+tests/
+  board_test.cpp          # CubeBoard の単体テスト（DXLib不要）
+  ai_player_test.cpp       # SimpleAI の単体テスト（DXLib不要）
+third_party/DxLib/       # DXLib本体（.gitignore対象、下記手順で配置）
 ```
 
-## 🛠 Build Prerequisites
+## 🛠 ビルド環境
 
-- **MinGW-w64** with g++ 10.2 or later (x86_64-posix-seh)
-- CMake ≥ 3.15
+- **Visual Studio 2022/2026 (Community可)** — C++ デスクトップ開発ワークロード（MSVC, CMake, vcpkg 同梱）
+- DXLib は公式に MSVC 向けであり、MinGW 等との互換性は非公式・不安定なため MSVC を使用する。
 
-Install MinGW-w64 on Windows:
+### DXLib の配置
 
-```bash
-winget install --exact-id BrechtSanders.WinLibs.POSIX.MSVCRT
-# or use winget install msys2 then pacman -S mingw-w64-x86_64-gcc
+1. https://dxlib.xsrv.jp/ の「DXライブラリのダウンロード」から Visual Studio (C++) 用最新版 zip を取得。
+2. 展開後の `DxLib_VC/プロジェクトに追加すべきファイル_VC用/` フォルダの中身一式を、このリポジトリの
+   `third_party/DxLib/` にコピーする（`DxLib.h` が `third_party/DxLib/DxLib.h` に来るように）。
+3. `third_party/DxLib/` は `.gitignore` 済みなのでコミットされない。
+
+DXLib が見つからない場合、CMake は警告を出して `cubo_othello` (実ゲーム本体) のビルドをスキップし、
+`cubo_tests`（盤面/AIロジックの単体テスト）だけをビルドする。
+
+## 🏗 ビルド & テスト
+
+Visual Studio に同梱の vcpkg をツールチェーンとして使う（`gtest` はマニフェストモードで自動取得）。
+
+```powershell
+cmake -S . -B build -G "Visual Studio 18 2026" -A x64 `
+  -DCMAKE_TOOLCHAIN_FILE="C:\Program Files\Microsoft Visual Studio\18\Community\VC\vcpkg\scripts\buildsystems\vcpkg.cmake"
+
+cmake --build build --config Debug
+
+ctest --test-dir build -C Debug --output-on-failure
 ```
 
-## 🏗 Build & Run
+DXLib が `third_party/DxLib/` に正しく配置されていれば `cubo_othello.exe` も同時にビルドされる。
 
-```bash
-cd build
-cmake .. -DCMAKE_CXX_COMPILER=g++
-cmake --build . --config Release -j4
+## ▶ 実行
+
+```powershell
+build\Debug\cubo_othello.exe             # 人 vs 人
+build\Debug\cubo_othello.exe --ai        # 人(黒) vs AI(白, 深さ3ミニマックス)
 ```
 
-Run the executable:
-
-```bash
-./cubo_othello.exe          # Human vs Human (random moves)
-./cubo_othello.exe --ai     # AI mode (simple minimax, depth=2)
-```
+操作: マウスクリックで合法手セルに着手 / `ESC` で終了 / `R` で盤面リセット。
 
 ## 📜 License
 

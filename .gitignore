@@ -12,6 +12,14 @@ build/
 # DXLib binaries
 DxLib/
 dxlib-bin.zip
+third_party/DxLib/
+third_party/*.zip
+
+# vcpkg manifest-mode local install/build cache
+vcpkg_installed/
+
+# DXLib runtime log
+Log.txt
 
 # NUL device (Windows)
 nul

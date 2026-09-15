@@ -1,173 +1,128 @@
 #include "board.hpp"
-#include <array>
-#include <vector>
-#include <algorithm>
 
 namespace cubo_othello {
 
-void CubeBoard::initialize() {
-    // Reset board to all empty
-    for (int z = 0; z < Z_LAYERS; ++z) {
-        for (int y = 0; y < BOARD_SIZE; ++y) {
-            for (int x = 0; x < BOARD_SIZE; ++x) {
-                grid_[x][y][z] = EMPTY;
-            }
-        }
-    }
+namespace {
 
-    // Place center stones at (x,y,z) ∈ {3,4}×{3,4}×{3,5}
-    // Black: x∈{3}, White: x∈{4}; y∈{3,4}; z∈{3,4,5} → 8 pieces total
+// The 6 axial directions: +x,-x,+y,-y,+z,-z.
+constexpr std::array<std::array<int, 3>, 6> kDirections{{
+    {1, 0, 0}, {-1, 0, 0},
+    {0, 1, 0}, {0, -1, 0},
+    {0, 0, 1}, {0, 0, -1},
+}};
+
+} // namespace
+
+CubeBoard::CubeBoard() { initialize(); }
+
+void CubeBoard::clear() {
+    for (auto& plane : grid_)
+        for (auto& row : plane)
+            row.fill(EMPTY);
+}
+
+void CubeBoard::set_for_testing(int x, int y, int z, int8_t color) { grid_[x][y][z] = color; }
+
+void CubeBoard::initialize() {
+    clear();
 
     for (int x : {3, 4}) {
         for (int y : {3, 4}) {
-            for (int z : {3, 4, 5}) {
-                if (x == 3) grid_[x][y][z] = Black;
-                else        grid_[x][y][z] = White;
+            for (int z : {3, 5}) {
+                grid_[x][y][z] = (x == 3) ? BLACK : WHITE;
             }
         }
     }
-
-    turn_   = BLACK;
-    game_over_ = false;
 }
 
-int CubeBoard::place_stone(int x, int y, int z, int color) {
-    if (x < 0 || x >= BOARD_SIZE || y < 0 || y >= BOARD_SIZE || z < 0 || z >= Z_LAYERS) return 0;
+bool CubeBoard::in_bounds(int x, int y, int z) {
+    return x >= 0 && x < BOARD_SIZE && y >= 0 && y < BOARD_SIZE && z >= 0 && z < BOARD_SIZE;
+}
 
-    if (grid_[x][y][z] != EMPTY) return 0;   // cell already occupied → invalid move
+int8_t CubeBoard::at(int x, int y, int z) const { return grid_[x][y][z]; }
 
-    int flipped_count = 0;
-    const int opponent = (color == BLACK) ? WHITE : BLACK;
+std::vector<Move> CubeBoard::scan_flips(int x, int y, int z, int8_t color) const {
+    if (!in_bounds(x, y, z) || grid_[x][y][z] != EMPTY) return {};
 
-    // Scan all 6 axial directions: (+x,-x,+y,-y,+z,-z)
-    constexpr auto dirs = std::array<std::pair<int,int>, 3>{
-        {{+1, 0}, {-1, 0}},   // x-axis pair
-        {{0, +1}, {0, -1}},   // y-axis pair
-        {{0, 0},  {0, 0}}     // placeholder — will be filled below
-    };
+    const int8_t opponent = (color == BLACK) ? WHITE : BLACK;
+    std::vector<Move> flips;
 
-    for (int axis = 0; axis < 3; ++axis) {
-        int dx = dirs[axis].first;
-        int dy = dirs[axis].second;
+    for (const auto& dir : kDirections) {
+        std::vector<Move> run;
+        int cx = x + dir[0], cy = y + dir[1], cz = z + dir[2];
 
-        // Scan outward from the immediate neighbor in +direction
-        int cx = x + dx, cy = y + dy, cz = z;   // start just beyond placed stone
-        bool sandwich_found = false;
-        std::vector<std::tuple<int,int,int>> flipped_cells;  // empty for now (we'll fill below)
-
-        while (cx >= 0 && cx < BOARD_SIZE && cy >= 0 && cy < BOARD_SIZE && cz >= 0 && cz < Z_LAYERS) {
-            if (grid_[cx][cy][cz] == color) {   // found own stone → sandwich complete!
-                sandwich_found = true;
-                break;
-            } else if (grid_[cx][cy][cz] != EMPTY) {
-                // opponent stone → keep scanning
-                flipped_cells.emplace_back(cx, cy, cz);
-            } else {
-                // empty cell → stop scanning this direction
-                break;
-            }
-
-            cx += dx; cy += dy; cz++;  // move outward
+        while (in_bounds(cx, cy, cz) && grid_[cx][cy][cz] == opponent) {
+            run.push_back({cx, cy, cz});
+            cx += dir[0]; cy += dir[1]; cz += dir[2];
         }
 
-        if (sandwich_found) {
-            // Flip all collected opponent stones
-            for (const auto& pos : flipped_cells) {
-                grid_[std::get<0>(pos)][std::get<1>(pos)][std::get<2>(pos)] = color;
-            }
-            flipped_count += static_cast<int>(flipped_cells.size());
+        if (!run.empty() && in_bounds(cx, cy, cz) && grid_[cx][cy][cz] == color) {
+            flips.insert(flips.end(), run.begin(), run.end());
         }
     }
 
-    // If no sandwich found in any direction, the move is invalid (Othello rules)
-    if (!sandwich_found && flipped_count == 0) return 0;
-
-    grid_[x][y][z] = color;   // place our stone
-    game_over_ = false;        // game continues unless full or no-moves detected later
-    return static_cast<int>(flipped_count);
+    return flips;
 }
 
-bool CubeBoard::game_over() const {
-    bool has_black_moves = get_valid_moves(BLACK).size() > 0;
-    bool has_white_moves = get_valid_moves(WHITE).size() > 0;
+int CubeBoard::place_stone(int x, int y, int z, int8_t color) {
+    auto flips = scan_flips(x, y, z, color);
+    if (flips.empty()) return 0;
 
-    if (!has_black_moves && !has_white_moves) return true;   // no-moves condition
+    grid_[x][y][z] = color;
+    for (const auto& m : flips) grid_[m.x][m.y][m.z] = color;
 
-    bool board_full = true;
-    for (int z = 0; z < Z_LAYERS; ++z) {
+    return static_cast<int>(flips.size());
+}
+
+std::vector<Move> CubeBoard::valid_moves(int8_t color) const {
+    std::vector<Move> moves;
+    for (int x = 0; x < BOARD_SIZE; ++x) {
         for (int y = 0; y < BOARD_SIZE; ++y) {
-            for (int x = 0; x < BOARD_SIZE; ++x) {
-                if (grid_[x][y][z] == EMPTY) {
-                    board_full = false;
-                    break;
-                }
+            for (int z = 0; z < BOARD_SIZE; ++z) {
+                if (grid_[x][y][z] != EMPTY) continue;
+                if (!scan_flips(x, y, z, color).empty()) moves.push_back({x, y, z});
             }
         }
     }
-
-    if (!board_full) return true;   // full board → draw
-
-    int black_count = count_pieces(BLACK);
-    int white_count = count_pieces(WHITE);
-    return (black_count == white_count);   // tie on full board → draw
+    return moves;
 }
 
-std::vector<std::tuple<int,int,int>> CubeBoard::get_valid_moves(int color) const {
-    std::vector<std::tuple<int,int,int>> valid;
-    const int opponent = (color == BLACK) ? WHITE : BLACK;
-
-    for (int z = 0; z < Z_LAYERS; ++z) {
-        for (int y = 0; y < BOARD_SIZE; ++y) {
-            for (int x = 0; x < BOARD_SIZE; ++x) {
-                if (grid_[x][y][z] != EMPTY) continue;   // skip non-empty cells
-
-                bool can_flip_any_direction = false;
-
-                // Check all 6 directions for a sandwich opportunity
-                constexpr auto dirs = std::array<std::pair<int,int>, 3>{
-                    {{+1, 0}, {-1, 0}},
-                    {{0, +1}, {0, -1}},
-                    {{0, 0},  {0, 0}}   // z-axis placeholder
-                };
-
-                for (int axis = 0; axis < 3; ++axis) {
-                    int dx = dirs[axis].first;
-                    int dy = dirs[axis].second;
-                    if (dx == 0 && dy == 0) continue;    // skip placeholder entry
-
-                    int cx = x + dx, cy = y + dy, cz = z;
-                    while (cx >= 0 && cx < BOARD_SIZE && cy >= 0 && cy < BOARD_SIZE && cz >= 0 && cz < Z_LAYERS) {
-                        if (grid_[cx][cy][cz] == color) {   // found own stone → sandwich!
-                            can_flip_any_direction = true;
-                            break;
-                        } else if (grid_[cx][cy][cz] != EMPTY) {
-                            cx += dx; cy += dy; cz++;       // keep scanning
-                        } else {
-                            break;  // empty cell breaks the chain
-                        }
-                    }
-                }
-
-                if (can_flip_any_direction) {
-                    valid.emplace_back(x, y, z);
-                }
-            }
-        }
-    }
-
-    return valid;
+bool CubeBoard::has_valid_moves(int8_t color) const {
+    for (int x = 0; x < BOARD_SIZE; ++x)
+        for (int y = 0; y < BOARD_SIZE; ++y)
+            for (int z = 0; z < BOARD_SIZE; ++z)
+                if (grid_[x][y][z] == EMPTY && !scan_flips(x, y, z, color).empty())
+                    return true;
+    return false;
 }
 
-int CubeBoard::count_pieces(int color) const {
-    int count = 0;
-    for (int z = 0; z < Z_LAYERS; ++z) {
-        for (int y = 0; y < BOARD_SIZE; ++y) {
-            for (int x = 0; x < BOARD_SIZE; ++x) {
-                if (grid_[x][y][z] == color) count++;
+int CubeBoard::count(int8_t color) const {
+    int n = 0;
+    for (const auto& plane : grid_)
+        for (const auto& row : plane)
+            for (int8_t cell : row)
+                if (cell == color) ++n;
+    return n;
+}
+
+int CubeBoard::evaluate() const { return count(BLACK) - count(WHITE); }
+
+GameOverReason CubeBoard::game_over_reason() const {
+    bool any_empty = false;
+    for (const auto& plane : grid_) {
+        for (const auto& row : plane) {
+            for (int8_t cell : row) {
+                if (cell == EMPTY) { any_empty = true; break; }
             }
+            if (any_empty) break;
         }
+        if (any_empty) break;
     }
-    return count;
+    if (!any_empty) return GameOverReason::Full;
+
+    if (!has_valid_moves(BLACK) && !has_valid_moves(WHITE)) return GameOverReason::NoMoves;
+
+    return GameOverReason::InProgress;
 }
 
 } // namespace cubo_othello

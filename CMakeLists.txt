@@ -1,28 +1,54 @@
-cmake_minimum_required(VERSION 3.16)
-project(CuboOthello VERSION 0.0.1 LANGUAGES CXX)
+cmake_minimum_required(VERSION 3.21)
+project(CuboOthello LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra")
 
-# DXLib include directory (environment variable or local copy)
-find_path(DXLIB_INCLUDE_DIR dxlib.h
-    PATHS ${DXLIB_PATH} $ENV{DXLIB_PATH} /dxlib_libs/include
-    PATH_SUFFIXES lib/include)
-
-if(NOT DXLIB_INCLUDE_DIR)
-    # Fallback: if DXLib is not installed, use mock headers for unit testing
-    message(STATUS "DXLib not found — building in test-only mode (no rendering).")
-    add_library(dxlib_stub INTERFACE)
-    target_include_directories(dxlib_stub INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include/mock_dxlib)
+if(MSVC)
+    add_compile_options(/W4)
 endif()
 
+# ---------------------------------------------------------------------------
+# Logic-only test target — no DXLib dependency, always builds.
+# ---------------------------------------------------------------------------
 find_package(GTest CONFIG REQUIRED)
 enable_testing()
 
-# --- gtest executables ---
-add_executable(cubo_board_test tests/cubo_othello/board_test.cpp)
-target_link_libraries(cubo_board_test PRIVATE GTest::gtest GTest::gtest_main dxlib_stub)
+add_executable(cubo_tests
+    src/board.cpp
+    src/ai_player.cpp
+    tests/board_test.cpp
+    tests/ai_player_test.cpp
+)
+target_include_directories(cubo_tests PRIVATE src)
+target_link_libraries(cubo_tests PRIVATE GTest::gtest GTest::gtest_main)
 
-include(CTest)
-add_test(NAME cubo_board_test COMMAND cubo_board_test)
+include(GoogleTest)
+gtest_discover_tests(cubo_tests)
+
+# ---------------------------------------------------------------------------
+# Full game executable — only built if DXLib is available.
+# ---------------------------------------------------------------------------
+set(DXLIB_ROOT "${CMAKE_SOURCE_DIR}/third_party/DxLib" CACHE PATH "DXLib VC package root (contains DxLib.h)")
+
+if(EXISTS "${DXLIB_ROOT}/DxLib.h")
+    add_executable(cubo_othello WIN32
+        src/main.cpp
+        src/board.cpp
+        src/ai_player.cpp
+        src/display.cpp
+        src/game_engine.cpp
+    )
+    target_include_directories(cubo_othello PRIVATE src "${DXLIB_ROOT}")
+    target_link_directories(cubo_othello PRIVATE "${DXLIB_ROOT}")
+    # windows.h (pulled in by DxLib.h) defines max()/min() macros that
+    # collide with std::max/std::min and std::numeric_limits<T>::max().
+    target_compile_definitions(cubo_othello PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    # DxLib.h itself selects and #pragma-comment-links the correct
+    # DxLib*_x64(_d).lib variant based on _DEBUG/_WIN64; only Windows
+    # multimedia timer support needs to be added explicitly.
+    target_link_libraries(cubo_othello PRIVATE winmm)
+else()
+    message(WARNING "DXLib not found at ${DXLIB_ROOT} (expected DxLib.h there) — "
+                     "skipping the cubo_othello GUI executable; only cubo_tests will build.")
+endif()

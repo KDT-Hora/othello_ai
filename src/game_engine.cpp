@@ -1,111 +1,73 @@
-// Cube Othello — Game Engine (Terminal Fallback Mode)
-#include <iostream>
-#include "board.hpp"
+#include "game_engine.hpp"
 
-namespace cubo {
+#include <string>
+
+namespace cubo_othello {
+
+namespace {
+int8_t opponent_of(int8_t color) { return (color == BLACK) ? WHITE : BLACK; }
+
+std::string result_message(const CubeBoard& board) {
+    int b = board.count(BLACK);
+    int w = board.count(WHITE);
+    if (b > w) return "BLACK WINS! (R to restart)";
+    if (w > b) return "WHITE WINS! (R to restart)";
+    return "DRAW (R to restart)";
+}
+} // namespace
+
+GameEngine::GameEngine(std::optional<int8_t> ai_color, int ai_depth) {
+    if (ai_color) ai_.emplace(*ai_color, ai_depth);
+}
+
+void GameEngine::advance_turn() {
+    const int8_t opponent = opponent_of(turn_);
+    if (board_.has_valid_moves(opponent)) {
+        turn_ = opponent;
+    }
+    // else: opponent has no move, so `turn_` keeps its turn (a pass).
+    // If neither side can move, game_over_reason() will report NoMoves.
+}
 
 int GameEngine::run() {
-    std::cout << "\n╔══════════════════════════════╗\n";
-    std::cout << "║   CUBE OTHELLO — Terminal    ║\n";
-    std::cout << "╚══════════════════════════════╝\n\n";
+    // FR-007's literal 120x80 default is too small for real mouse play;
+    // scale up 8x while keeping the same projection math (resolution-
+    // independent) and aspect ratio.
+    if (!display_.init(960, 640)) return 1;
 
-    while (!game_over_) {
-        render_board();
+    bool quit = false;
 
-        if (check_game_over()) break;
+    while (!quit) {
+        const GameOverReason reason = board_.game_over_reason();
+        const std::string message =
+            (reason == GameOverReason::InProgress) ? std::string{} : result_message(board_);
 
-        PieceColor turn = get_turn_player();  // 黒が先攻
-        std::string turn_str = (turn == PieceColor::BLACK) ? "⚫ BLACK" : "⚪ WHITE";
-        std::cout << "\n━━━ Turn: [" << turn_str << "] ━━━\n";
+        display_.render_frame(board_, turn_, message);
+        InputResult input = display_.handle_input(board_, turn_);
 
-        auto valid_moves = board_.get_all_valid_moves();
+        if (input.quit) break;
 
-        if (valid_moves.empty()) {
-            std::cout << "No valid moves — switching turn...\n\n";
-            turn_player_ = (turn_player_ == PieceColor::BLACK) ? PieceColor::WHITE : PieceColor::BLACK;
-        } else {
-            // 簡易：ランダムな有効手を選択（MVP: 最初の有効手を採用）
-            auto& move = valid_moves[0];   // MVP: 最初の有効手を採用
-            int mx = std::get<0>(move);
-            int my = std::get<1>(move);
+        if (input.reset_requested) {
+            board_.initialize();
+            turn_ = BLACK;
+            continue;
+        }
 
-            board_.set_cell(mx, my, turn_player_);
+        if (reason != GameOverReason::InProgress) continue;
 
-            // 挟み込みによる石の反転
-            auto flipped = board_.flip_stones(mx, my, turn_player_);
-
-            if (!flipped.empty()) {
-                int count = static_cast<int>(flipped.size());
-                std::cout << "Flipped " << count << " stone(s)!\n";
-            } else {
-                std::cout << "(No sandwich — piece placed without flip)\n";
-            }
-
-            move_count_++;
+        if (ai_ && ai_->color() == turn_) {
+            auto move = ai_->choose_move(board_);
+            if (move) board_.place_stone(move->x, move->y, move->z, turn_);
+            advance_turn();
+        } else if (input.clicked_move) {
+            const Move& mv = *input.clicked_move;
+            board_.place_stone(mv.x, mv.y, mv.z, turn_);
+            advance_turn();
         }
     }
 
-    render_final_score();
+    display_.shutdown();
     return 0;
 }
 
-void GameEngine::render_board() {
-    board_.print();
-}
-
-bool GameEngine::check_game_over() {
-    auto counts = board_.count_pieces();
-    int black = std::get<0>(counts);
-    int white = std::get<1>(counts);
-
-    // 盤面が埋まっているか確認（簡易：隅のみで十分）
-    bool all_filled = true;
-    for (int x = 0; x < BOARD_SIZE; ++x) {
-        if (board_.grid_[x][0] == PieceColor::EMPTY ||
-            board_.grid_[x][BOARD_SIZE - 1] == PieceColor::EMPTY) {
-            all_filled = false;
-            break;
-        }
-    }
-
-    if (all_filled && black + white == static_cast<int>(BOARD_SIZE * BOARD_SIZE)) {
-        winner_ = 'D';   // ドロー（盤面埋まりきったが引き分け）
-        game_over_ = true;
-        return true;
-    }
-
-    // 有効手の有無でゲームオーバー判定
-    auto valid_moves = board_.get_all_valid_moves();
-    if (valid_moves.empty()) {
-        winner_ = 'D';   // ドロー（stalemate）
-        game_over_ = true;
-        return true;
-    }
-
-    return false;
-}
-
-void GameEngine::render_final_score() const {
-    auto counts = board_.count_pieces();
-    int black_count = std::get<0>(counts);
-    int white_count = std::get<1>(counts);
-
-    std::cout << "\n━━━━━━━━━━━━━━━━━━\n";
-    std::cout << "   FINAL SCORE      \n";
-    std::cout << "  BLACK:  " << black_count << " stones\n";
-    std::cout << "  WHITE:  " << white_count << " stones\n";
-
-    if (black_count > white_count) {
-        std::cout << "\n   Result: BLACK WINS!\n";
-    } else if (white_count > black_count) {
-        std::cout << "\n   Result: WHITE WINS!\n";
-    } else {
-        std::cout << "\n   Result: DRAW\n";
-    }
-
-    std::cout << "━━━━━━━━━━━━━━━━━━\n\n";
-}
-
-const CubeBoard& GameEngine::get_board() const { return board_; }
-
-} // namespace cubo
+} // namespace cubo_othello

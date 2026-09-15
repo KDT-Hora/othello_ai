@@ -1,43 +1,36 @@
+// Cube Othello -- SimpleAI: depth-limited minimax with no pruning.
 #pragma once
 
-#include "board.hpp"
+#include <cstdint>
 #include <optional>
 #include <random>
-#include <utility>
+
+#include "board.hpp"
 
 namespace cubo_othello {
 
-// ─── Simple AI Agent (Minimax without alpha-beta pruning) ───────────────────────
+class SimpleAI {
+public:
+    explicit SimpleAI(int8_t color, int depth = 3);
 
-struct SimpleAIPlayer {
-    enum class Role { HUMAN, AI };
+    int8_t color() const { return color_; }
 
-    struct Config {
-        int search_depth = 3;      // minimax depth (plies: half-moves)
-        bool use_random_tiebreak   = true;
-        std::random_device rd{};
-        std::mt19937 gen{rd()};
-    };
-
-    SimpleAIPlayer(Role role, Config config = {})
-        : role(role), depth(config.search_depth), rng(config.gen) {}
-
-    // Evaluate board from AI's perspective (positive = good for AI)
+    // Stone-count evaluation from this AI's own perspective:
+    // positive = favorable to `color()`.
     int evaluate(const CubeBoard& board) const;
 
-    // Search best move using minimax at given plies
-    std::optional<std::tuple<int,int,int>> search(const CubeBoard&, bool is_maximizing_player) const;
+    // Returns the chosen move, or nullopt if `color()` has no legal move
+    // (i.e. it must pass). Never returns an illegal move.
+    std::optional<Move> choose_move(const CubeBoard& board) const;
 
 private:
-    Role role{};                    // HUMAN or AI
-    int depth{};                   // remaining plies to search
-    std::mt19937 rng{};            // for tie-breaking randomness
+    int8_t color_;
+    int depth_;
+    mutable std::mt19937 rng_;
 
-    // Minimax recursive helper (called internally by search())
-    int minimax(const CubeBoard&, bool is_maximizing, int ply_left) const;
-
-    // Helper: collect all valid moves for a given player
-    std::vector<std::tuple<int,int,int>> get_legal_moves(const CubeBoard&, int color) const;
+    // Minimax without alpha-beta pruning. `to_move` is the color to play at
+    // this node; the returned score is always from color_'s perspective.
+    int minimax(CubeBoard board, int8_t to_move, int ply_left) const;
 };
 
 } // namespace cubo_othello
