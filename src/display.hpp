@@ -12,6 +12,7 @@ namespace cubo_othello {
 struct InputResult {
     bool quit = false;                 // ESC pressed, or window closed
     bool reset_requested = false;      // 'R' pressed
+    bool undo_requested = false;       // 'U' pressed
     std::optional<Move> clicked_move;  // a legal cell the mouse clicked on
 };
 
@@ -35,6 +36,7 @@ public:
 private:
     int width_ = 120;
     int height_ = 80;
+    bool undo_key_was_down_ = false; // edge-detect so holding 'U' doesn't unwind all history at once
 
     // Project cube cell (x,y,z) to screen coordinates using the flat-plane
     // isometric approximation from the spec.

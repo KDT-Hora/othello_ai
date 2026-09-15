@@ -130,6 +130,7 @@ void DXLibDisplay::render_frame(const CubeBoard& board, int8_t turn, const std::
     const char* turn_label = (turn == BLACK) ? "BLACK" : "WHITE";
     DrawFormatString(8, 8, color_text(), "Turn: %s   B:%d  W:%d", turn_label, board.count(BLACK),
                       board.count(WHITE));
+    DrawFormatString(8, height_ - 36, color_text(), "R: reset   U: undo   ESC: quit");
     if (!status_message.empty()) {
         DrawFormatString(8, height_ - 20, color_text(), "%s", status_message.c_str());
     }
@@ -152,6 +153,11 @@ InputResult DXLibDisplay::handle_input(const CubeBoard& board, int8_t turn) {
     if (CheckHitKey(KEY_INPUT_R)) {
         result.reset_requested = true;
     }
+    const bool undo_key_down = CheckHitKey(KEY_INPUT_U) != 0;
+    if (undo_key_down && !undo_key_was_down_) {
+        result.undo_requested = true;
+    }
+    undo_key_was_down_ = undo_key_down;
 
     if ((GetMouseInput() & MOUSE_INPUT_LEFT) != 0) {
         int mx, my;

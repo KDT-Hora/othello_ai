@@ -1,19 +1,12 @@
+// State/turn logic only -- no DXLib symbols referenced, so this file can be
+// linked into cubo_tests without a DXLib install. GameEngine::run() (the
+// actual DXLib window loop) lives in game_loop.cpp instead.
 #include "game_engine.hpp"
-
-#include <string>
 
 namespace cubo_othello {
 
 namespace {
 int8_t opponent_of(int8_t color) { return (color == BLACK) ? WHITE : BLACK; }
-
-std::string result_message(const CubeBoard& board) {
-    int b = board.count(BLACK);
-    int w = board.count(WHITE);
-    if (b > w) return "BLACK WINS! (R to restart)";
-    if (w > b) return "WHITE WINS! (R to restart)";
-    return "DRAW (R to restart)";
-}
 } // namespace
 
 GameEngine::GameEngine(std::optional<int8_t> ai_color, int ai_depth) {
@@ -29,45 +22,23 @@ void GameEngine::advance_turn() {
     // If neither side can move, game_over_reason() will report NoMoves.
 }
 
-int GameEngine::run() {
-    // FR-007's literal 120x80 default is too small for real mouse play;
-    // scale up 8x while keeping the same projection math (resolution-
-    // independent) and aspect ratio.
-    if (!display_.init(960, 640)) return 1;
+void GameEngine::push_history() { history_.emplace_back(board_, turn_); }
 
-    bool quit = false;
+void GameEngine::undo() {
+    if (history_.empty()) return;
 
-    while (!quit) {
-        const GameOverReason reason = board_.game_over_reason();
-        const std::string message =
-            (reason == GameOverReason::InProgress) ? std::string{} : result_message(board_);
+    board_ = history_.back().first;
+    turn_ = history_.back().second;
+    history_.pop_back();
 
-        display_.render_frame(board_, turn_, message);
-        InputResult input = display_.handle_input(board_, turn_);
-
-        if (input.quit) break;
-
-        if (input.reset_requested) {
-            board_.initialize();
-            turn_ = BLACK;
-            continue;
-        }
-
-        if (reason != GameOverReason::InProgress) continue;
-
-        if (ai_ && ai_->color() == turn_) {
-            auto move = ai_->choose_move(board_);
-            if (move) board_.place_stone(move->x, move->y, move->z, turn_);
-            advance_turn();
-        } else if (input.clicked_move) {
-            const Move& mv = *input.clicked_move;
-            board_.place_stone(mv.x, mv.y, mv.z, turn_);
-            advance_turn();
-        }
+    // If undoing a single move would hand control straight back to the AI,
+    // undo one more step so the human regains control immediately instead
+    // of watching the AI simply redo the same reply.
+    if (ai_ && ai_->color() == turn_ && !history_.empty()) {
+        board_ = history_.back().first;
+        turn_ = history_.back().second;
+        history_.pop_back();
     }
-
-    display_.shutdown();
-    return 0;
 }
 
 } // namespace cubo_othello
