@@ -65,6 +65,7 @@ private:
     bool undo_key_was_down_ = false; // edge-detect so holding 'U' doesn't unwind all history at once
     std::optional<int8_t> ai_color_;
     bool spectate_ = false;
+    int hover_flip_count_ = -1;      // stones the hovered move would flip; -1 = no hover
     bool menu_key_prev_[5] = {};     // up, down, left, right, confirm
     bool menu_click_prev_ = false;
     bool menu_key_was_down_ = false; // 'M' edge detect

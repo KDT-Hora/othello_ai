@@ -245,7 +245,9 @@ void DXLibDisplay::draw_stones(const CubeBoard& board) {
 void DXLibDisplay::mark_valid_moves(const CubeBoard& board, int8_t color) {
     int mx, my;
     GetMousePoint(&mx, &my);
-    const auto hover = pick_move(board, color, mx, my);
+    const bool human_turn = !spectate_ && !(ai_color_ && *ai_color_ == color);
+    const auto hover = human_turn ? pick_move(board, color, mx, my) : std::nullopt;
+    hover_flip_count_ = -1;
     const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(GetNowCount()) * 0.006f);
 
     for (const auto& mv : board.valid_moves(color)) {
@@ -256,6 +258,23 @@ void DXLibDisplay::mark_valid_moves(const CubeBoard& board, int8_t color) {
         const int r = std::max(3, static_cast<int>(kSpacing * kStoneRadius * scale));
         const bool hot = hover && hover->x == mv.x && hover->y == mv.y && hover->z == mv.z;
         if (hot) {
+            // Preview: mark every stone this move would flip.
+            const auto flips = board.flips_for(mv.x, mv.y, mv.z, color);
+            hover_flip_count_ = static_cast<int>(flips.size());
+            const auto& mover_neon = (color == BLACK) ? kCyan : kMagenta;
+            for (const auto& f : flips) {
+                float fx, fy, fd, fs;
+                project(static_cast<float>(f.x), static_cast<float>(f.y), static_cast<float>(f.z), fx, fy, fd, fs);
+                const int qx = static_cast<int>(fx), qy = static_cast<int>(fy);
+                const int fr = std::max(3, static_cast<int>(kSpacing * kStoneRadius * fs));
+                SetDrawBlendMode(DX_BLENDMODE_ADD, 110);
+                DrawLine(px, py, qx, qy, rgb(kYellow), 3);
+                SetDrawBlendMode(DX_BLENDMODE_NOBLEND, 0);
+                glow(qx, qy, fr, kYellow, static_cast<int>(20.0f + 30.0f * pulse));
+                DrawCircle(qx, qy, fr + 5, rgb(kYellow), FALSE, 4);
+                DrawCircle(qx, qy, fr + 5, GetColor(0, 0, 0), FALSE, 1);
+                DrawCircle(qx, qy, std::max(2, fr / 3), rgb(mover_neon), TRUE); // the color it will become
+            }
             glow(px, py, r, kYellow, 140);
             DrawCircle(px, py, r + 3, rgb(kYellow), FALSE, 3);
             DrawCircle(px, py, r / 2, rgb(kYellow), TRUE);
@@ -289,7 +308,12 @@ void DXLibDisplay::render_frame(const CubeBoard& board, int8_t turn, const std::
     const int legal = static_cast<int>(board.valid_moves(turn).size());
     std::snprintf(buf, sizeof buf, "置ける場所： %d か所（緑の輪）", legal);
     DrawString(20, 92, buf, rgb(kNeonGreen));
-    if (!spectate_) DrawString(20, 114, "クリックした緑の輪に石を置きます", color_dim_text());
+    if (hover_flip_count_ >= 0) {
+        std::snprintf(buf, sizeof buf, "ここに置くと %d 個ひっくり返る（黄色の輪）", hover_flip_count_);
+        DrawString(20, 114, buf, rgb(kYellow));
+    } else if (!spectate_) {
+        DrawString(20, 114, "緑の輪にカーソルを合わせると、裏返る石が分かります", color_dim_text());
+    }
 
     const int b = board.count(BLACK), w = board.count(WHITE);
     const int bar_w = 260, bar_x = width_ - bar_w - 24, bar_y = 40;

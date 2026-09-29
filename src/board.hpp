@@ -48,6 +48,10 @@ public:
     // the board is left unchanged.
     int place_stone(int x, int y, int z, int8_t color);
 
+    // The opponent stones that placing `color` at (x,y,z) would flip (empty
+    // if the move is illegal). Does not modify the board.
+    std::vector<Move> flips_for(int x, int y, int z, int8_t color) const { return scan_flips(x, y, z, color); }
+
     // All empty cells from which `color` has at least one legal move.
     std::vector<Move> valid_moves(int8_t color) const;
     bool has_valid_moves(int8_t color) const;

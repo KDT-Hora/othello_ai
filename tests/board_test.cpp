@@ -259,3 +259,27 @@ TEST(CubeBoard, DiagonalSandwichMakesMoveValid) {
     EXPECT_EQ(moves[0].y, 4);
     EXPECT_EQ(moves[0].z, 3);
 }
+
+TEST(CubeBoard, FlipsForListsExactlyTheStonesPlaceStoneWouldFlip) {
+    CubeBoard board;
+    board.clear();
+    board.set_for_testing(1, 0, 0, WHITE);
+    board.set_for_testing(2, 0, 0, WHITE);
+    board.set_for_testing(3, 0, 0, BLACK);
+    board.set_for_testing(1, 1, 1, WHITE);
+    board.set_for_testing(2, 2, 2, BLACK);
+
+    const auto preview = board.flips_for(0, 0, 0, BLACK);
+    ASSERT_EQ(preview.size(), 3u); // (1,0,0), (2,0,0) along +x and (1,1,1) diagonally
+
+    // The preview must not touch the board, and must agree with the real move.
+    EXPECT_EQ(board.at(1, 0, 0), WHITE);
+    EXPECT_EQ(board.at(0, 0, 0), EMPTY);
+    EXPECT_EQ(board.place_stone(0, 0, 0, BLACK), 3);
+}
+
+TEST(CubeBoard, FlipsForIsEmptyForIllegalMoves) {
+    CubeBoard board;
+    EXPECT_TRUE(board.flips_for(0, 0, 0, BLACK).empty()); // no sandwich
+    EXPECT_TRUE(board.flips_for(3, 3, 3, BLACK).empty()); // occupied
+}
