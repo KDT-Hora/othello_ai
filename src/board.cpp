@@ -4,12 +4,18 @@ namespace cubo_othello {
 
 namespace {
 
-// The 6 axial directions: +x,-x,+y,-y,+z,-z.
-constexpr std::array<std::array<int, 3>, 6> kDirections{{
-    {1, 0, 0}, {-1, 0, 0},
-    {0, 1, 0}, {0, -1, 0},
-    {0, 0, 1}, {0, 0, -1},
-}};
+// All 26 neighbour directions in 3D: 6 axial, 12 edge-diagonal, 8 corner-diagonal.
+constexpr std::array<std::array<int, 3>, 26> make_directions() {
+    std::array<std::array<int, 3>, 26> dirs{};
+    int n = 0;
+    for (int dx = -1; dx <= 1; ++dx)
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dz = -1; dz <= 1; ++dz)
+                if (dx != 0 || dy != 0 || dz != 0) dirs[n++] = {dx, dy, dz};
+    return dirs;
+}
+constexpr std::array<std::array<int, 3>, 26> kDirections = make_directions();
+constexpr int kMid = BOARD_SIZE / 2; // center 2x2x2 occupies kMid-1 .. kMid
 
 } // namespace
 
@@ -28,9 +34,9 @@ void CubeBoard::initialize() {
 
     // Center 2x2x2 in a 3D checkerboard: no two same-colored stones are
     // face-adjacent, and each color gets 4 stones.
-    for (int x : {3, 4})
-        for (int y : {3, 4})
-            for (int z : {3, 4})
+    for (int x : {kMid - 1, kMid})
+        for (int y : {kMid - 1, kMid})
+            for (int z : {kMid - 1, kMid})
                 grid_[x][y][z] = ((x + y + z) % 2 == 0) ? BLACK : WHITE;
 }
 

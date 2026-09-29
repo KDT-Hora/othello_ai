@@ -44,7 +44,7 @@ private:
     float yaw_ = 0.6f;               // view rotation about the screen-vertical axis (radians)
     float pitch_ = 0.5f;             // view rotation about the screen-horizontal axis (radians)
 
-    // Rotates board-space point (px,py,pz) (cell centers at integers 0..7)
+    // Rotates board-space point (px,py,pz) (cell centers at integers 0..BOARD_SIZE-1)
     // by the current view and perspective-projects it. `depth` is larger
     // for points farther from the viewer; `scale` is the perspective factor.
     void project(float px, float py, float pz, float& sx, float& sy, float& depth, float& scale) const;

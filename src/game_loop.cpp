@@ -11,9 +11,9 @@ namespace {
 std::string result_message(const CubeBoard& board) {
     int b = board.count(BLACK);
     int w = board.count(WHITE);
-    if (b > w) return "BLACK WINS! (R to restart)";
-    if (w > b) return "WHITE WINS! (R to restart)";
-    return "DRAW (R to restart)";
+    if (b > w) return "黒（シアン）の勝ち！  Rキーで再戦";
+    if (w > b) return "白（マゼンタ）の勝ち！  Rキーで再戦";
+    return "引き分け  Rキーで再戦";
 }
 } // namespace
 

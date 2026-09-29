@@ -12,9 +12,10 @@ using cubo_othello::WHITE;
 TEST(CubeBoard, InitializePlacesCenterStones) {
     CubeBoard board;
 
-    for (int x : {3, 4}) {
-        for (int y : {3, 4}) {
-            for (int z : {3, 4}) {
+    const int mid = BOARD_SIZE / 2;
+    for (int x : {mid - 1, mid}) {
+        for (int y : {mid - 1, mid}) {
+            for (int z : {mid - 1, mid}) {
                 EXPECT_EQ(board.at(x, y, z), ((x + y + z) % 2 == 0) ? BLACK : WHITE)
                     << "at (" << x << "," << y << "," << z << ")";
             }
@@ -70,10 +71,10 @@ TEST(CubeBoard, PlaceStoneWithoutSandwichIsRejected) {
 }
 
 TEST(CubeBoard, OpeningMoveFlipsOneStone) {
-    CubeBoard board; // (3,3,3)=WHITE, (4,3,3)=BLACK by default init
-    ASSERT_EQ(board.place_stone(2, 3, 3, BLACK), 1);
-    EXPECT_EQ(board.at(2, 3, 3), BLACK);
-    EXPECT_EQ(board.at(3, 3, 3), BLACK); // flipped
+    CubeBoard board; // (2,2,2)=BLACK, (3,2,2)=WHITE by default init
+    ASSERT_EQ(board.place_stone(4, 2, 2, BLACK), 1);
+    EXPECT_EQ(board.at(4, 2, 2), BLACK);
+    EXPECT_EQ(board.at(3, 2, 2), BLACK); // flipped
 }
 
 // The following six tests isolate one axial direction each, using
@@ -92,10 +93,10 @@ TEST(CubeBoard, PlaceStoneFlipsAlongPlusX) {
 TEST(CubeBoard, PlaceStoneFlipsAlongMinusX) {
     CubeBoard board;
     board.clear();
-    board.set_for_testing(5, 0, 0, WHITE);
-    board.set_for_testing(4, 0, 0, BLACK);
-    ASSERT_EQ(board.place_stone(6, 0, 0, BLACK), 1);
-    EXPECT_EQ(board.at(5, 0, 0), BLACK);
+    board.set_for_testing(4, 0, 0, WHITE);
+    board.set_for_testing(3, 0, 0, BLACK);
+    ASSERT_EQ(board.place_stone(5, 0, 0, BLACK), 1);
+    EXPECT_EQ(board.at(4, 0, 0), BLACK);
 }
 
 TEST(CubeBoard, PlaceStoneFlipsAlongPlusY) {
@@ -110,10 +111,10 @@ TEST(CubeBoard, PlaceStoneFlipsAlongPlusY) {
 TEST(CubeBoard, PlaceStoneFlipsAlongMinusY) {
     CubeBoard board;
     board.clear();
-    board.set_for_testing(0, 5, 0, WHITE);
-    board.set_for_testing(0, 4, 0, BLACK);
-    ASSERT_EQ(board.place_stone(0, 6, 0, BLACK), 1);
-    EXPECT_EQ(board.at(0, 5, 0), BLACK);
+    board.set_for_testing(0, 4, 0, WHITE);
+    board.set_for_testing(0, 3, 0, BLACK);
+    ASSERT_EQ(board.place_stone(0, 5, 0, BLACK), 1);
+    EXPECT_EQ(board.at(0, 4, 0), BLACK);
 }
 
 TEST(CubeBoard, PlaceStoneFlipsAlongPlusZ) {
@@ -128,10 +129,10 @@ TEST(CubeBoard, PlaceStoneFlipsAlongPlusZ) {
 TEST(CubeBoard, PlaceStoneFlipsAlongMinusZ) {
     CubeBoard board;
     board.clear();
-    board.set_for_testing(0, 0, 5, WHITE);
-    board.set_for_testing(0, 0, 4, BLACK);
-    ASSERT_EQ(board.place_stone(0, 0, 6, BLACK), 1);
-    EXPECT_EQ(board.at(0, 0, 5), BLACK);
+    board.set_for_testing(0, 0, 4, WHITE);
+    board.set_for_testing(0, 0, 3, BLACK);
+    ASSERT_EQ(board.place_stone(0, 0, 5, BLACK), 1);
+    EXPECT_EQ(board.at(0, 0, 4), BLACK);
 }
 
 TEST(CubeBoard, PlaceStoneFlipsMultipleDirectionsAtOnce) {
@@ -217,4 +218,44 @@ TEST(CubeBoard, EvaluateIsBlackMinusWhiteCount) {
     CubeBoard board;
     EXPECT_EQ(board.evaluate(), board.count(BLACK) - board.count(WHITE));
     EXPECT_EQ(board.evaluate(), 0); // opening position is balanced
+}
+
+TEST(CubeBoard, PlaceStoneFlipsAlongFaceDiagonal) {
+    CubeBoard board;
+    board.clear();
+    board.set_for_testing(1, 1, 0, WHITE);
+    board.set_for_testing(2, 2, 0, BLACK);
+    ASSERT_EQ(board.place_stone(0, 0, 0, BLACK), 1);
+    EXPECT_EQ(board.at(1, 1, 0), BLACK);
+}
+
+TEST(CubeBoard, PlaceStoneFlipsAlongSpaceDiagonal) {
+    CubeBoard board;
+    board.clear();
+    board.set_for_testing(1, 1, 1, WHITE);
+    board.set_for_testing(2, 2, 2, WHITE);
+    board.set_for_testing(3, 3, 3, BLACK);
+    ASSERT_EQ(board.place_stone(0, 0, 0, BLACK), 2);
+    EXPECT_EQ(board.at(1, 1, 1), BLACK);
+    EXPECT_EQ(board.at(2, 2, 2), BLACK);
+}
+
+TEST(CubeBoard, DiagonalRunEndingInEmptyCellIsNotASandwich) {
+    CubeBoard board;
+    board.clear();
+    board.set_for_testing(1, 1, 1, WHITE);
+    EXPECT_EQ(board.place_stone(0, 0, 0, BLACK), 0);
+    EXPECT_EQ(board.at(1, 1, 1), WHITE);
+}
+
+TEST(CubeBoard, DiagonalSandwichMakesMoveValid) {
+    CubeBoard board;
+    board.clear();
+    board.set_for_testing(4, 3, 2, WHITE);
+    board.set_for_testing(5, 2, 1, BLACK);
+    const auto moves = board.valid_moves(BLACK);
+    ASSERT_EQ(moves.size(), 1u);
+    EXPECT_EQ(moves[0].x, 3);
+    EXPECT_EQ(moves[0].y, 4);
+    EXPECT_EQ(moves[0].z, 3);
 }

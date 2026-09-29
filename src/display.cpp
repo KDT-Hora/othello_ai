@@ -4,14 +4,17 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <limits>
 #include <vector>
 
 namespace cubo_othello {
 
 namespace {
-constexpr float kSpacing = 44.0f;    // pixels between neighbouring cell centers (before perspective)
+constexpr float kSpacing = 60.0f;    // pixels between neighbouring cell centers (before perspective)
 constexpr float kCamDist = 22.0f;    // perspective camera distance, in cell units
+constexpr float kStoneRadius = 0.36f; // stone radius as a fraction of cell spacing
 constexpr float kCenter = (BOARD_SIZE - 1) * 0.5f;
 constexpr float kPi = 3.14159265f;
 constexpr float kKeyRotateStep = 0.03f;
@@ -19,15 +22,64 @@ constexpr float kDragRotatePerPixel = 0.008f;
 constexpr float kDefaultYaw = 0.6f;
 constexpr float kDefaultPitch = 0.5f;
 
-unsigned int color_black_stone() { return GetColor(0x2a, 0x36, 0x4a); }
-unsigned int color_white_stone() { return GetColor(0xf0, 0xf0, 0xf5); }
-unsigned int color_grid_line() { return GetColor(0x34, 0x34, 0x4c); }
-unsigned int color_frame_line() { return GetColor(0x88, 0x88, 0xb0); }
-unsigned int color_marker() { return GetColor(0x30, 0xff, 0x60); }
-unsigned int color_hover() { return GetColor(0xff, 0xe0, 0x40); }
-unsigned int color_text() { return GetColor(0xff, 0xff, 0xff); }
+// Cyberpunk neon palette.
+constexpr int kCyan[3] = {0, 229, 255};
+constexpr int kMagenta[3] = {255, 43, 214};
+constexpr int kNeonGreen[3] = {57, 255, 20};
+constexpr int kYellow[3] = {255, 240, 60};
+
+unsigned int rgb(const int (&c)[3], float k = 1.0f) {
+    return GetColor(std::clamp(static_cast<int>(static_cast<float>(c[0]) * k), 0, 255),
+                    std::clamp(static_cast<int>(static_cast<float>(c[1]) * k), 0, 255),
+                    std::clamp(static_cast<int>(static_cast<float>(c[2]) * k), 0, 255));
+}
+unsigned int color_grid_line() { return GetColor(0x26, 0x3a, 0x66); }
+unsigned int color_dim_text() { return GetColor(0x6a, 0x8a, 0xb8); }
 
 int shade(int c, float k) { return std::clamp(static_cast<int>(static_cast<float>(c) * k), 0, 255); }
+
+// Additive soft glow: a few concentric translucent discs.
+void glow(int x, int y, int r, const int (&c)[3], int strength) {
+    SetDrawBlendMode(DX_BLENDMODE_ADD, std::clamp(strength, 0, 255));
+    for (int i = 3; i >= 1; --i) DrawCircle(x, y, r + i * std::max(2, r / 3), rgb(c, 0.35f), TRUE);
+    SetDrawBlendMode(DX_BLENDMODE_NOBLEND, 0);
+}
+
+// Neon line: wide dim additive stroke under a thin bright core.
+void neon_line(int x1, int y1, int x2, int y2, const int (&c)[3], int alpha) {
+    SetDrawBlendMode(DX_BLENDMODE_ADD, alpha);
+    DrawLine(x1, y1, x2, y2, rgb(c, 0.6f), 5);
+    SetDrawBlendMode(DX_BLENDMODE_NOBLEND, 0);
+    DrawLine(x1, y1, x2, y2, rgb(c), 1);
+}
+
+void draw_background(int w, int h) {
+    for (int y = 0; y < h; ++y) {
+        const float t = static_cast<float>(y) / static_cast<float>(h);
+        DrawLine(0, y, w, y, GetColor(static_cast<int>(8 + 30 * t * t), 5, static_cast<int>(22 + 40 * t)));
+    }
+    // CRT scanlines.
+    SetDrawBlendMode(DX_BLENDMODE_ALPHA, 45);
+    for (int y = 0; y < h; y += 3) DrawLine(0, y, w, y, GetColor(0, 0, 0));
+    SetDrawBlendMode(DX_BLENDMODE_NOBLEND, 0);
+}
+
+int text_width(const char* text, int size) {
+    SetFontSize(size);
+    const int w = GetDrawStringWidth(text, static_cast<int>(std::strlen(text)));
+    SetFontSize(16);
+    return w;
+}
+
+void text_glow(int x, int y, const char* text, const int (&c)[3], int size) {
+    SetFontSize(size);
+    SetDrawBlendMode(DX_BLENDMODE_ADD, 90);
+    DrawString(x - 1, y, text, rgb(c, 0.6f));
+    DrawString(x + 1, y, text, rgb(c, 0.6f));
+    SetDrawBlendMode(DX_BLENDMODE_NOBLEND, 0);
+    DrawString(x, y, text, rgb(c));
+    SetFontSize(16);
+}
 } // namespace
 
 bool DXLibDisplay::init(int width, int height) {
@@ -39,9 +91,11 @@ bool DXLibDisplay::init(int width, int height) {
     ChangeWindowMode(TRUE);
     SetWindowText("Cube Othello");
 
+    SetUseCharCodeFormat(DX_CHARCODEFORMAT_UTF8); // source strings are UTF-8 (MSVC /utf-8)
     if (DxLib_Init() == -1) return false;
+    ChangeFont("MS Gothic");
 
-    SetBackgroundColor(0x1C, 0x1C, 0x2A);
+    SetBackgroundColor(0x08, 0x05, 0x16);
     SetDrawScreen(DX_SCREEN_BACK);
     return true;
 }
@@ -69,7 +123,7 @@ void DXLibDisplay::project(float px, float py, float pz, float& sx, float& sy, f
 }
 
 void DXLibDisplay::draw_cube_faces() {
-    // Outline of the 8x8x8 block; cell boundaries lie at -0.5 .. 7.5.
+    // Outline of the cube; cell boundaries lie at -0.5 .. BOARD_SIZE-0.5.
     const float lo = -0.5f, hi = BOARD_SIZE - 0.5f;
     const float c[8][3] = {
         {lo, lo, lo}, {hi, lo, lo}, {hi, hi, lo}, {lo, hi, lo},
@@ -82,8 +136,8 @@ void DXLibDisplay::draw_cube_faces() {
         float x1, y1, d1, s1, x2, y2, d2, s2;
         project(c[e[0]][0], c[e[0]][1], c[e[0]][2], x1, y1, d1, s1);
         project(c[e[1]][0], c[e[1]][1], c[e[1]][2], x2, y2, d2, s2);
-        DrawLine(static_cast<int>(x1), static_cast<int>(y1), static_cast<int>(x2), static_cast<int>(y2),
-                 color_frame_line());
+        neon_line(static_cast<int>(x1), static_cast<int>(y1), static_cast<int>(x2), static_cast<int>(y2),
+                  kMagenta, 60);
     }
 }
 
@@ -128,7 +182,7 @@ std::optional<Move> DXLibDisplay::pick_move(const CubeBoard& board, int8_t turn,
         float sx, sy, depth, scale;
         project(static_cast<float>(mv.x), static_cast<float>(mv.y), static_cast<float>(mv.z), sx, sy, depth,
                 scale);
-        const float r = kSpacing * 0.3f * scale;
+        const float r = kSpacing * kStoneRadius * scale;
         const float dx = sx - static_cast<float>(mx), dy = sy - static_cast<float>(my);
         // Among overlapping candidates, prefer the one nearest the viewer.
         if (dx * dx + dy * dy <= r * r && depth < best_depth) {
@@ -161,26 +215,30 @@ void DXLibDisplay::draw_stones(const CubeBoard& board) {
         project(static_cast<float>(c.x), static_cast<float>(c.y), static_cast<float>(c.z), sxf, syf, depth,
                 scale);
         const int sx = static_cast<int>(sxf), sy = static_cast<int>(syf);
-        const int r = std::max(2, static_cast<int>(kSpacing * 0.3f * scale));
+        const int r = std::max(2, static_cast<int>(kSpacing * kStoneRadius * scale));
         // Nearer = brighter, so depth stays readable where cells overlap.
-        const float light = std::clamp(1.0f - depth / (kCenter * 3.4f) * 0.55f, 0.4f, 1.15f);
+        const float light = std::clamp(1.0f - depth / (kCenter * 3.4f) * 0.8f, 0.25f, 1.15f);
 
         const int8_t cell = board.at(c.x, c.y, c.z);
         if (cell == EMPTY) {
-            DrawCircle(sx, sy, std::max(1, r / 4),
-                       GetColor(shade(0x5a, light), shade(0x5a, light), shade(0x74, light)), TRUE);
+            DrawCircle(sx, sy, std::max(1, r / 7),
+                       GetColor(shade(0x38, light), shade(0x4c, light), shade(0x78, light)), TRUE);
             continue;
         }
 
-        const unsigned int base = (cell == BLACK) ? color_black_stone() : color_white_stone();
-        int cr, cg, cb;
-        GetColor2(base, &cr, &cg, &cb);
-        DrawCircle(sx, sy, r, GetColor(shade(cr, light), shade(cg, light), shade(cb, light)), TRUE);
-        DrawCircle(sx, sy, r, (cell == BLACK) ? GetColor(0x90, 0xa0, 0xc0) : GetColor(0x30, 0x30, 0x40),
-                   FALSE, 2);
-        // Small specular dot so the stone reads as a sphere.
+        // BLACK = dark core with cyan neon; WHITE = bright core with magenta neon.
+        const bool is_black = (cell == BLACK);
+        const auto& neon = is_black ? kCyan : kMagenta;
+        glow(sx, sy, r, neon, static_cast<int>(40.0f * light));
+        if (is_black) {
+            DrawCircle(sx, sy, r, GetColor(shade(12, light), shade(18, light), shade(40, light)), TRUE);
+        } else {
+            DrawCircle(sx, sy, r, GetColor(shade(255, light), shade(235, light), shade(255, light)), TRUE);
+        }
+        DrawCircle(sx, sy, r, rgb(neon, light), FALSE, 2);
+        // Specular highlight so the stone reads as a sphere.
         DrawCircle(sx - r / 3, sy - r / 3, std::max(1, r / 5),
-                   (cell == BLACK) ? GetColor(0x70, 0x80, 0xa0) : GetColor(255, 255, 255), TRUE);
+                   is_black ? rgb(kCyan, 0.7f * light) : GetColor(255, 255, 255), TRUE);
     }
 }
 
@@ -188,39 +246,71 @@ void DXLibDisplay::mark_valid_moves(const CubeBoard& board, int8_t color) {
     int mx, my;
     GetMousePoint(&mx, &my);
     const auto hover = pick_move(board, color, mx, my);
+    const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(GetNowCount()) * 0.006f);
 
     for (const auto& mv : board.valid_moves(color)) {
         float sx, sy, depth, scale;
         project(static_cast<float>(mv.x), static_cast<float>(mv.y), static_cast<float>(mv.z), sx, sy, depth,
                 scale);
         const int px = static_cast<int>(sx), py = static_cast<int>(sy);
-        const int r = std::max(3, static_cast<int>(kSpacing * 0.3f * scale));
+        const int r = std::max(3, static_cast<int>(kSpacing * kStoneRadius * scale));
         const bool hot = hover && hover->x == mv.x && hover->y == mv.y && hover->z == mv.z;
         if (hot) {
-            DrawCircle(px, py, r + 3, color_hover(), FALSE, 3);
-            DrawCircle(px, py, r / 2, color_hover(), TRUE);
+            glow(px, py, r, kYellow, 140);
+            DrawCircle(px, py, r + 3, rgb(kYellow), FALSE, 3);
+            DrawCircle(px, py, r / 2, rgb(kYellow), TRUE);
         } else {
-            DrawCircle(px, py, r, color_marker(), FALSE, 2);
+            glow(px, py, r, kNeonGreen, static_cast<int>(25.0f + 40.0f * pulse));
+            DrawCircle(px, py, r, rgb(kNeonGreen), FALSE, 2);
         }
     }
 }
 
 void DXLibDisplay::render_frame(const CubeBoard& board, int8_t turn, const std::string& status_message) {
     ClearDrawScreen();
+    draw_background(width_, height_);
 
     draw_cube_faces();
     draw_grid();
     draw_stones(board);
     mark_valid_moves(board, turn);
 
-    const char* turn_label = (turn == BLACK) ? "BLACK" : "WHITE";
-    DrawFormatString(8, 8, color_text(), "Turn: %s   B:%d  W:%d", turn_label, board.count(BLACK),
-                      board.count(WHITE));
-    DrawFormatString(8, height_ - 52, color_text(),
-                      "Right-drag / Arrows: rotate view   V: reset view   (green ring = legal move)");
-    DrawFormatString(8, height_ - 36, color_text(), "Click: place   R: reset   U: undo   ESC: quit");
+    // --- HUD -------------------------------------------------------------
+    text_glow(20, 14, "キューブ・オセロ", kCyan, 28);
+    DrawLine(20, 50, 300, 50, rgb(kCyan, 0.6f));
+
+    const bool black_turn = (turn == BLACK);
+    char buf[96];
+    std::snprintf(buf, sizeof buf, "手番： %s", black_turn ? "黒（シアン）" : "白（マゼンタ）");
+    text_glow(20, 60, buf, black_turn ? kCyan : kMagenta, 22);
+
+    const int legal = static_cast<int>(board.valid_moves(turn).size());
+    std::snprintf(buf, sizeof buf, "置ける場所： %d か所（緑の輪）", legal);
+    DrawString(20, 92, buf, rgb(kNeonGreen));
+    DrawString(20, 114, "クリックした緑の輪に石を置きます", color_dim_text());
+
+    const int b = board.count(BLACK), w = board.count(WHITE);
+    const int bar_w = 260, bar_x = width_ - bar_w - 24, bar_y = 40;
+    const int total = std::max(1, b + w);
+    const int b_px = bar_w * b / total;
+    DrawString(bar_x, 14, "石の数", color_dim_text());
+    DrawBox(bar_x - 2, bar_y - 2, bar_x + bar_w + 2, bar_y + 16, GetColor(10, 10, 30), TRUE);
+    DrawBox(bar_x, bar_y, bar_x + b_px, bar_y + 14, rgb(kCyan, 0.85f), TRUE);
+    DrawBox(bar_x + b_px, bar_y, bar_x + bar_w, bar_y + 14, rgb(kMagenta, 0.85f), TRUE);
+    DrawBox(bar_x - 2, bar_y - 2, bar_x + bar_w + 2, bar_y + 16, rgb(kCyan, 0.7f), FALSE);
+    std::snprintf(buf, sizeof buf, "黒 %d", b);
+    DrawString(bar_x, bar_y + 22, buf, rgb(kCyan));
+    std::snprintf(buf, sizeof buf, "白 %d", w);
+    DrawString(bar_x + bar_w - GetDrawStringWidth(buf, static_cast<int>(std::strlen(buf))), bar_y + 22, buf,
+               rgb(kMagenta));
+
+    DrawString(20, height_ - 62, "視点回転： 右ドラッグ / 矢印キー　　視点リセット： V", color_dim_text());
+    DrawString(20, height_ - 42, "石を置く： 左クリック　　一手戻す： U　　最初から： R　　終了： ESC", color_dim_text());
+    DrawString(20, height_ - 22, "ルール： 縦・横・斜め（26方向）に相手の石を挟むと裏返せます", color_dim_text());
+
     if (!status_message.empty()) {
-        DrawFormatString(8, height_ - 20, color_text(), "%s", status_message.c_str());
+        const int tw = text_width(status_message.c_str(), 32);
+        text_glow(width_ / 2 - tw / 2, height_ / 2 - 20, status_message.c_str(), kYellow, 32);
     }
 
     ScreenFlip();
@@ -247,9 +337,10 @@ InputResult DXLibDisplay::handle_input(const CubeBoard& board, int8_t turn) {
     }
     undo_key_was_down_ = undo_key_down;
 
-    // View rotation: arrow keys and right-button drag.
-    if (CheckHitKey(KEY_INPUT_LEFT)) yaw_ -= kKeyRotateStep;
-    if (CheckHitKey(KEY_INPUT_RIGHT)) yaw_ += kKeyRotateStep;
+    // View rotation: arrow keys and right-button drag. Horizontal direction
+    // is inverted relative to the naive mapping (drag right -> view turns left).
+    if (CheckHitKey(KEY_INPUT_LEFT)) yaw_ += kKeyRotateStep;
+    if (CheckHitKey(KEY_INPUT_RIGHT)) yaw_ -= kKeyRotateStep;
     if (CheckHitKey(KEY_INPUT_UP)) pitch_ -= kKeyRotateStep;
     if (CheckHitKey(KEY_INPUT_DOWN)) pitch_ += kKeyRotateStep;
     if (CheckHitKey(KEY_INPUT_V)) {
@@ -263,7 +354,7 @@ InputResult DXLibDisplay::handle_input(const CubeBoard& board, int8_t turn) {
 
     const bool right_down = (buttons & MOUSE_INPUT_RIGHT) != 0;
     if (right_down && right_was_down_) {
-        yaw_ += static_cast<float>(mx - last_mouse_x_) * kDragRotatePerPixel;
+        yaw_ -= static_cast<float>(mx - last_mouse_x_) * kDragRotatePerPixel;
         pitch_ += static_cast<float>(my - last_mouse_y_) * kDragRotatePerPixel;
     }
     right_was_down_ = right_down;

@@ -1,6 +1,6 @@
-# Cube Othello (8×8×8) — C++20 / DXLib
+# Cube Othello (6×6×6) — C++20 / DXLib
 
-3D 拡張オセロ。8×8×8 の立方体（512マス）上で、6軸方向（±x,±y,±z）の挟み込みでプレイする。
+3D 拡張オセロ。6×6×6 の立方体（216マス）上で、26方向（縦・横・斜め）の挟み込みでプレイする。
 盤面ロジック + 深さ3のミニマックス AI + DXLib による回転可能な3D透視投影レンダリングで構成される。
 詳細な仕様は [`specs/cubo-othello/spec.md`](specs/cubo-othello/spec.md) を参照。
 

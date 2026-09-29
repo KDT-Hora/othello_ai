@@ -1,4 +1,4 @@
-// Cube Othello -- CubeBoard: 8x8x8 board state and rules.
+// Cube Othello -- CubeBoard: 6x6x6 board state and rules.
 #pragma once
 
 #include <array>
@@ -7,7 +7,7 @@
 
 namespace cubo_othello {
 
-inline constexpr int BOARD_SIZE = 8;   // 8x8x8 cube (512 cells)
+inline constexpr int BOARD_SIZE = 6;   // 6x6x6 cube (216 cells)
 
 inline constexpr int8_t EMPTY = -1;
 inline constexpr int8_t BLACK = 0;
@@ -28,7 +28,8 @@ class CubeBoard {
 public:
     CubeBoard();
 
-    // Reset to the 8-stone center opening (3D checkerboard, no same-color neighbours) and clear all other cells.
+    // Reset to the 8-stone center opening (3D checkerboard, no same-color
+    // neighbours) and clear all other cells.
     void initialize();
 
     // Empties every cell (no center stones). Test/setup helper.
@@ -42,7 +43,7 @@ public:
     int8_t at(int x, int y, int z) const;
 
     // Place `color` at (x,y,z), flipping any sandwiched opponent runs along
-    // the 6 axial directions. Returns the number of stones flipped (not
+    // all 26 directions (axial and diagonal). Returns the number of stones flipped (not
     // counting the placed stone itself); 0 means the move was illegal and
     // the board is left unchanged.
     int place_stone(int x, int y, int z, int8_t color);
