@@ -28,7 +28,7 @@ class CubeBoard {
 public:
     CubeBoard();
 
-    // Reset to the standard 8-stone center opening and clear all other cells.
+    // Reset to the 8-stone center opening (3D checkerboard, no same-color neighbours) and clear all other cells.
     void initialize();
 
     // Empties every cell (no center stones). Test/setup helper.

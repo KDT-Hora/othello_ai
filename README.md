@@ -1,7 +1,7 @@
 # Cube Othello (8×8×8) — C++20 / DXLib
 
 3D 拡張オセロ。8×8×8 の立方体（512マス）上で、6軸方向（±x,±y,±z）の挟み込みでプレイする。
-盤面ロジック + 深さ3のミニマックス AI + DXLib による平面等角投影レンダリングで構成される。
+盤面ロジック + 深さ3のミニマックス AI + DXLib による回転可能な3D透視投影レンダリングで構成される。
 詳細な仕様は [`specs/cubo-othello/spec.md`](specs/cubo-othello/spec.md) を参照。
 
 ## 📁 プロジェクト構成
@@ -12,7 +12,7 @@ vcpkg.json              # vcpkg 依存関係 (gtest)
 src/
   board.hpp/.cpp        # CubeBoard — 盤面状態とルール（純粋ロジック、DXLib非依存）
   ai_player.hpp/.cpp     # SimpleAI — 深さ限定ミニマックス（枝刈りなし、石数差評価）
-  display.hpp/.cpp       # DXLibDisplay — 平面等角投影レンダリング + 入力処理
+  display.hpp/.cpp       # DXLibDisplay — 回転可能な3D透視投影レンダリング + 入力処理
   game_engine.hpp/.cpp   # GameEngine — 手番管理・パス判定・メインループ
   main.cpp               # WinMain エントリポイント
 tests/
@@ -23,7 +23,7 @@ third_party/DxLib/       # DXLib本体（.gitignore対象、下記手順で配�
 
 ## 🛠 ビルド環境
 
-- **Visual Studio 2022/2026 (Community可)** — C++ デスクトップ開発ワークロード（MSVC, CMake, vcpkg 同梱）
+- **Visual Studio 2022 以降 (Community可)** — C++ デスクトップ開発ワークロード（MSVC, CMake, vcpkg 同梱）
 - DXLib は公式に MSVC 向けであり、MinGW 等との互換性は非公式・不安定なため MSVC を使用する。
 
 ### DXLib の配置
@@ -58,7 +58,10 @@ build\Debug\cubo_othello.exe             # 人 vs 人
 build\Debug\cubo_othello.exe --ai        # 人(黒) vs AI(白, 深さ3ミニマックス)
 ```
 
-操作: マウスクリックで合法手セルに着手 / `ESC` で終了 / `R` で盤面リセット。
+操作:
+- 左クリック: 合法手（緑の輪）に着手。カーソルが乗った手は黄色でハイライト
+- 右ドラッグ / 矢印キー: 視点の回転、`V`: 視点リセット
+- `U`: 一手戻す、`R`: 盤面リセット、`ESC`: 終了
 
 ## 📜 License
 

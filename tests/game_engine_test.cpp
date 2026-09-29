@@ -59,7 +59,7 @@ TEST(GameEngine, UndoInHumanVsHumanRestoresThePreviousSnapshot) {
     const int white_before = board.count(WHITE);
 
     Access::push_history(engine);
-    ASSERT_EQ(board.place_stone(5, 3, 3, BLACK), 1); // a real opening move
+    ASSERT_EQ(board.place_stone(2, 3, 3, BLACK), 1); // a real opening move
     Access::turn(engine) = WHITE;
 
     ASSERT_NE(board.count(BLACK), black_before); // sanity: the move actually happened
@@ -78,7 +78,7 @@ TEST(GameEngine, UndoWithAiSkipsBackPastTheAisReplyToTheHumansTurn) {
     CubeBoard& board = Access::board(engine);
 
     Access::push_history(engine); // snapshot before Black's move
-    ASSERT_EQ(board.place_stone(5, 3, 3, BLACK), 1);
+    ASSERT_EQ(board.place_stone(2, 3, 3, BLACK), 1);
     Access::turn(engine) = WHITE;
 
     Access::push_history(engine); // snapshot before White(AI)'s move
@@ -107,7 +107,7 @@ TEST(GameEngine, UndoAtTheVeryFirstAiMoveReturnsToTheInitialPositionAndAisTurn) 
     CubeBoard& board = Access::board(engine);
 
     Access::push_history(engine);
-    ASSERT_EQ(board.place_stone(5, 3, 3, BLACK), 1);
+    ASSERT_EQ(board.place_stone(2, 3, 3, BLACK), 1);
     Access::turn(engine) = WHITE;
 
     Access::undo(engine);

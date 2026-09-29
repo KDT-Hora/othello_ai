@@ -37,11 +37,20 @@ private:
     int width_ = 120;
     int height_ = 80;
     bool undo_key_was_down_ = false; // edge-detect so holding 'U' doesn't unwind all history at once
+    bool left_was_down_ = false;     // edge-detect so one click places exactly one stone
+    bool right_was_down_ = false;    // right-drag rotates the view
+    int last_mouse_x_ = 0;
+    int last_mouse_y_ = 0;
+    float yaw_ = 0.6f;               // view rotation about the screen-vertical axis (radians)
+    float pitch_ = 0.5f;             // view rotation about the screen-horizontal axis (radians)
 
-    // Project cube cell (x,y,z) to screen coordinates using the flat-plane
-    // isometric approximation from the spec.
-    void project(int x, int y, int z, int& sx, int& sy) const;
-    float lighting(int z) const;
+    // Rotates board-space point (px,py,pz) (cell centers at integers 0..7)
+    // by the current view and perspective-projects it. `depth` is larger
+    // for points farther from the viewer; `scale` is the perspective factor.
+    void project(float px, float py, float pz, float& sx, float& sy, float& depth, float& scale) const;
+
+    // Nearest-to-viewer legal cell under the mouse pointer, if any.
+    std::optional<Move> pick_move(const CubeBoard& board, int8_t turn, int mx, int my) const;
 };
 
 } // namespace cubo_othello

@@ -26,13 +26,12 @@ void CubeBoard::set_for_testing(int x, int y, int z, int8_t color) { grid_[x][y]
 void CubeBoard::initialize() {
     clear();
 
-    for (int x : {3, 4}) {
-        for (int y : {3, 4}) {
-            for (int z : {3, 5}) {
-                grid_[x][y][z] = (x == 3) ? BLACK : WHITE;
-            }
-        }
-    }
+    // Center 2x2x2 in a 3D checkerboard: no two same-colored stones are
+    // face-adjacent, and each color gets 4 stones.
+    for (int x : {3, 4})
+        for (int y : {3, 4})
+            for (int z : {3, 4})
+                grid_[x][y][z] = ((x + y + z) % 2 == 0) ? BLACK : WHITE;
 }
 
 bool CubeBoard::in_bounds(int x, int y, int z) {

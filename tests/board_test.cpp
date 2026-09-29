@@ -14,8 +14,8 @@ TEST(CubeBoard, InitializePlacesCenterStones) {
 
     for (int x : {3, 4}) {
         for (int y : {3, 4}) {
-            for (int z : {3, 5}) {
-                EXPECT_EQ(board.at(x, y, z), (x == 3) ? BLACK : WHITE)
+            for (int z : {3, 4}) {
+                EXPECT_EQ(board.at(x, y, z), ((x + y + z) % 2 == 0) ? BLACK : WHITE)
                     << "at (" << x << "," << y << "," << z << ")";
             }
         }
@@ -32,10 +32,34 @@ TEST(CubeBoard, InitializePlacesCenterStones) {
     EXPECT_EQ(board.count(WHITE), 4);
 }
 
+TEST(CubeBoard, InitialStonesNeverHaveSameColorNeighbours) {
+    CubeBoard board;
+    const int dirs[6][3] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+
+    for (int x = 0; x < BOARD_SIZE; ++x)
+        for (int y = 0; y < BOARD_SIZE; ++y)
+            for (int z = 0; z < BOARD_SIZE; ++z) {
+                if (board.at(x, y, z) == EMPTY) continue;
+                for (const auto& d : dirs) {
+                    const int nx = x + d[0], ny = y + d[1], nz = z + d[2];
+                    if (nx < 0 || ny < 0 || nz < 0 || nx >= BOARD_SIZE || ny >= BOARD_SIZE || nz >= BOARD_SIZE)
+                        continue;
+                    EXPECT_NE(board.at(nx, ny, nz), board.at(x, y, z))
+                        << "(" << x << "," << y << "," << z << ") and (" << nx << "," << ny << "," << nz << ")";
+                }
+            }
+}
+
+TEST(CubeBoard, BothColorsHaveAnOpeningMove) {
+    CubeBoard board;
+    EXPECT_TRUE(board.has_valid_moves(BLACK));
+    EXPECT_TRUE(board.has_valid_moves(WHITE));
+}
+
 TEST(CubeBoard, PlaceStoneOnOccupiedCellIsRejected) {
     CubeBoard board;
-    EXPECT_EQ(board.place_stone(3, 3, 3, WHITE), 0);
-    EXPECT_EQ(board.at(3, 3, 3), BLACK); // unchanged
+    EXPECT_EQ(board.place_stone(3, 3, 3, BLACK), 0);
+    EXPECT_EQ(board.at(3, 3, 3), WHITE); // unchanged
 }
 
 TEST(CubeBoard, PlaceStoneWithoutSandwichIsRejected) {
@@ -46,10 +70,10 @@ TEST(CubeBoard, PlaceStoneWithoutSandwichIsRejected) {
 }
 
 TEST(CubeBoard, OpeningMoveFlipsOneStone) {
-    CubeBoard board; // (3,3,3)=BLACK, (4,3,3)=WHITE by default init
-    ASSERT_EQ(board.place_stone(5, 3, 3, BLACK), 1);
-    EXPECT_EQ(board.at(5, 3, 3), BLACK);
-    EXPECT_EQ(board.at(4, 3, 3), BLACK); // flipped
+    CubeBoard board; // (3,3,3)=WHITE, (4,3,3)=BLACK by default init
+    ASSERT_EQ(board.place_stone(2, 3, 3, BLACK), 1);
+    EXPECT_EQ(board.at(2, 3, 3), BLACK);
+    EXPECT_EQ(board.at(3, 3, 3), BLACK); // flipped
 }
 
 // The following six tests isolate one axial direction each, using
