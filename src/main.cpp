@@ -8,7 +8,7 @@
 #include "game_engine.hpp"
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR lpCmdLine, int) {
-    // "--ai" / "--ai=white" selects Human(Black) vs. AI(White) (default when
+    // "--ai" / "--ai=white" skips the mode menu and selects Human(Black) vs. AI(White) (default when
     // "--ai" is given with no color); "--ai=black" plays AI as Black instead.
     std::optional<int8_t> ai_color;
     std::string args = lpCmdLine ? lpCmdLine : "";

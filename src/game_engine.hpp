@@ -23,11 +23,17 @@ public:
     // Runs the DXLib window loop until the user quits. Returns an exit code.
     int run();
 
+    // Resets to a fresh game: `ai_color` = nullopt for human vs human.
+    // `spectate` = AI vs AI (ai_color is ignored); both AIs use `ai_depth`.
+    void start_game(std::optional<int8_t> ai_color, int ai_depth, bool spectate = false);
+
 private:
     CubeBoard board_;
     int8_t turn_ = BLACK;
     DXLibDisplay display_;
     std::optional<SimpleAI> ai_;
+    std::optional<SimpleAI> ai2_; // second AI, only in AI-vs-AI (ai_ = Black, ai2_ = White)
+    bool skip_menu_ = false; // command line already chose the mode
 
     // Snapshots taken before each placed stone (T035, optional undo).
     std::vector<std::pair<CubeBoard, int8_t>> history_;

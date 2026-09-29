@@ -118,4 +118,70 @@ TEST(GameEngine, UndoAtTheVeryFirstAiMoveReturnsToTheInitialPositionAndAisTurn) 
     EXPECT_EQ(Access::history_size(engine), 0u);
 }
 
+TEST(GameEngine, StartGameResetsBoardTurnAndHistory) {
+    GameEngine engine;
+    CubeBoard& board = Access::board(engine);
+    Access::push_history(engine);
+    ASSERT_EQ(board.place_stone(4, 2, 2, BLACK), 1);
+    Access::turn(engine) = WHITE;
+
+    engine.start_game(std::nullopt, 1);
+
+    EXPECT_EQ(Access::board(engine).count(BLACK), 4);
+    EXPECT_EQ(Access::board(engine).count(WHITE), 4);
+    EXPECT_EQ(Access::turn(engine), BLACK);
+    EXPECT_EQ(Access::history_size(engine), 0u);
+}
+
+TEST(GameEngine, StartGameWithAiColorMakesUndoSkipTheAiReply) {
+    GameEngine engine; // human vs human at first
+    engine.start_game(WHITE, 1);
+    CubeBoard& board = Access::board(engine);
+
+    Access::push_history(engine);
+    ASSERT_EQ(board.place_stone(4, 2, 2, BLACK), 1);
+    Access::turn(engine) = WHITE;
+    Access::push_history(engine);
+    ASSERT_EQ(board.place_stone(4, 3, 2, WHITE), 1);
+    Access::turn(engine) = BLACK;
+
+    Access::undo(engine); // AI-mode undo unwinds both plies
+    EXPECT_EQ(Access::history_size(engine), 0u);
+    EXPECT_EQ(Access::turn(engine), BLACK);
+}
+
+TEST(GameEngine, StartGameWithoutAiRestoresSingleStepUndo) {
+    GameEngine engine(WHITE, 1);
+    engine.start_game(std::nullopt, 1);
+    CubeBoard& board = Access::board(engine);
+
+    Access::push_history(engine);
+    ASSERT_EQ(board.place_stone(4, 2, 2, BLACK), 1);
+    Access::turn(engine) = WHITE;
+    Access::push_history(engine);
+    ASSERT_EQ(board.place_stone(4, 3, 2, WHITE), 1);
+    Access::turn(engine) = BLACK;
+
+    Access::undo(engine); // human vs human: one ply only
+    EXPECT_EQ(Access::history_size(engine), 1u);
+    EXPECT_EQ(Access::turn(engine), WHITE);
+}
+
+TEST(GameEngine, SpectateModeUndoIsSingleStep) {
+    GameEngine engine;
+    engine.start_game(std::nullopt, 1, /*spectate=*/true); // AI vs AI
+    CubeBoard& board = Access::board(engine);
+
+    Access::push_history(engine);
+    ASSERT_EQ(board.place_stone(4, 2, 2, BLACK), 1);
+    Access::turn(engine) = WHITE;
+    Access::push_history(engine);
+    ASSERT_EQ(board.place_stone(4, 3, 2, WHITE), 1);
+    Access::turn(engine) = BLACK;
+
+    Access::undo(engine); // must not skip a second ply just because an AI owns the turn
+    EXPECT_EQ(Access::history_size(engine), 1u);
+    EXPECT_EQ(Access::turn(engine), WHITE);
+}
+
 } // namespace cubo_othello

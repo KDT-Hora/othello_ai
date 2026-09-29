@@ -10,7 +10,22 @@ int8_t opponent_of(int8_t color) { return (color == BLACK) ? WHITE : BLACK; }
 } // namespace
 
 GameEngine::GameEngine(std::optional<int8_t> ai_color, int ai_depth) {
-    if (ai_color) ai_.emplace(*ai_color, ai_depth);
+    start_game(ai_color, ai_depth);
+    skip_menu_ = ai_color.has_value();
+}
+
+void GameEngine::start_game(std::optional<int8_t> ai_color, int ai_depth, bool spectate) {
+    board_.initialize();
+    turn_ = BLACK;
+    history_.clear();
+    ai_.reset();
+    ai2_.reset();
+    if (spectate) {
+        ai_.emplace(BLACK, ai_depth);
+        ai2_.emplace(WHITE, ai_depth);
+    } else if (ai_color) {
+        ai_.emplace(*ai_color, ai_depth);
+    }
 }
 
 void GameEngine::advance_turn() {
@@ -34,7 +49,7 @@ void GameEngine::undo() {
     // If undoing a single move would hand control straight back to the AI,
     // undo one more step so the human regains control immediately instead
     // of watching the AI simply redo the same reply.
-    if (ai_ && ai_->color() == turn_ && !history_.empty()) {
+    if (ai_ && !ai2_ && ai_->color() == turn_ && !history_.empty()) {
         board_ = history_.back().first;
         turn_ = history_.back().second;
         history_.pop_back();

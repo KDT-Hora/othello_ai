@@ -54,14 +54,14 @@ DXLib が `third_party/DxLib/` に正しく配置されていれば `cubo_othell
 ## ▶ 実行
 
 ```powershell
-build\Debug\cubo_othello.exe             # 人 vs 人
-build\Debug\cubo_othello.exe --ai        # 人(黒) vs AI(白, 深さ3ミニマックス)
+build\Debug\cubo_othello.exe             # モード選択メニューを表示（二人対戦 / AI対戦・黒 / AI対戦・白 / AI同士の観戦、AIの強さ3段階）
+build\Debug\cubo_othello.exe --ai        # メニューを飛ばして 人(黒) vs AI(白, 深さ3) で開始（--ai=black で AI が黒）
 ```
 
 操作:
 - 左クリック: 合法手（緑の輪）に着手。カーソルが乗った手は黄色でハイライト
 - 右ドラッグ / 矢印キー: 視点の回転、`V`: 視点リセット
-- `U`: 一手戻す、`R`: 盤面リセット、`ESC`: 終了
+- `U`: 一手戻す、`R`: 盤面リセット、`M`: モード選択メニューへ、`ESC`: 終了
 
 ## 📜 License
 

@@ -281,13 +281,15 @@ void DXLibDisplay::render_frame(const CubeBoard& board, int8_t turn, const std::
 
     const bool black_turn = (turn == BLACK);
     char buf[96];
-    std::snprintf(buf, sizeof buf, "手番： %s", black_turn ? "黒（シアン）" : "白（マゼンタ）");
+    const char* who = spectate_ ? "  ＜AI同士で観戦中＞"
+                      : (!ai_color_ ? "" : (*ai_color_ == turn ? "  ＜AIの番＞" : "  ＜あなたの番＞"));
+    std::snprintf(buf, sizeof buf, "手番： %s%s", black_turn ? "黒（シアン）" : "白（マゼンタ）", who);
     text_glow(20, 60, buf, black_turn ? kCyan : kMagenta, 22);
 
     const int legal = static_cast<int>(board.valid_moves(turn).size());
     std::snprintf(buf, sizeof buf, "置ける場所： %d か所（緑の輪）", legal);
     DrawString(20, 92, buf, rgb(kNeonGreen));
-    DrawString(20, 114, "クリックした緑の輪に石を置きます", color_dim_text());
+    if (!spectate_) DrawString(20, 114, "クリックした緑の輪に石を置きます", color_dim_text());
 
     const int b = board.count(BLACK), w = board.count(WHITE);
     const int bar_w = 260, bar_x = width_ - bar_w - 24, bar_y = 40;
@@ -305,7 +307,7 @@ void DXLibDisplay::render_frame(const CubeBoard& board, int8_t turn, const std::
                rgb(kMagenta));
 
     DrawString(20, height_ - 62, "視点回転： 右ドラッグ / 矢印キー　　視点リセット： V", color_dim_text());
-    DrawString(20, height_ - 42, "石を置く： 左クリック　　一手戻す： U　　最初から： R　　終了： ESC", color_dim_text());
+    DrawString(20, height_ - 42, "石を置く： 左クリック　　一手戻す： U　　最初から： R　　メニュー： M　　終了： ESC", color_dim_text());
     DrawString(20, height_ - 22, "ルール： 縦・横・斜め（26方向）に相手の石を挟むと裏返せます", color_dim_text());
 
     if (!status_message.empty()) {
@@ -314,6 +316,122 @@ void DXLibDisplay::render_frame(const CubeBoard& board, int8_t turn, const std::
     }
 
     ScreenFlip();
+}
+
+namespace {
+constexpr int kMenuRowW = 520, kMenuRowH = 50, kMenuRowGap = 10, kMenuRowTop = 168;
+constexpr int kMenuDiffW = 150, kMenuDiffH = 44, kMenuDiffGap = 20;
+constexpr int kMenuStartW = 300, kMenuStartH = 52;
+
+const char* const kModeNames[kMenuModeCount] = {"二人で対戦", "AIと対戦　あなたは黒（先手）",
+                                                 "AIと対戦　あなたは白（後手）", "AI同士で観戦"};
+const char* const kDiffNames[kMenuDifficultyCount] = {"かんたん", "ふつう", "むずかしい"};
+
+bool in_box(int mx, int my, int x, int y, int w, int h) { return mx >= x && mx < x + w && my >= y && my < y + h; }
+int str_w(const char* s) { return GetDrawStringWidth(s, static_cast<int>(std::strlen(s))); }
+int diff_top() { return kMenuRowTop + kMenuModeCount * (kMenuRowH + kMenuRowGap) + 24; }
+int diff_left(int cx, int i) {
+    const int total = kMenuDifficultyCount * kMenuDiffW + (kMenuDifficultyCount - 1) * kMenuDiffGap;
+    return cx - total / 2 + i * (kMenuDiffW + kMenuDiffGap);
+}
+int start_top() { return diff_top() + kMenuDiffH + 28; }
+} // namespace
+
+void DXLibDisplay::render_menu(int mode, int difficulty) {
+    ClearDrawScreen();
+    draw_background(width_, height_);
+
+    int mx, my;
+    GetMousePoint(&mx, &my);
+    const int cx = width_ / 2;
+
+    const char* title = "キューブ・オセロ";
+    text_glow(cx - text_width(title, 48) / 2, 60, title, kCyan, 48);
+    const char* sub = "モードを選んでください";
+    DrawString(cx - str_w(sub) / 2, 130, sub, color_dim_text());
+
+    for (int i = 0; i < kMenuModeCount; ++i) {
+        const int x = cx - kMenuRowW / 2, y = kMenuRowTop + i * (kMenuRowH + kMenuRowGap);
+        const bool sel = (i == mode);
+        const bool hov = in_box(mx, my, x, y, kMenuRowW, kMenuRowH);
+        DrawBox(x, y, x + kMenuRowW, y + kMenuRowH, sel ? GetColor(0, 50, 70) : GetColor(12, 10, 32), TRUE);
+        if (sel) glow(cx, y + kMenuRowH / 2, kMenuRowH / 2, kCyan, 20);
+        DrawBox(x, y, x + kMenuRowW, y + kMenuRowH,
+                sel ? rgb(kCyan) : (hov ? rgb(kMagenta, 0.8f) : GetColor(60, 70, 110)), FALSE);
+        SetFontSize(24);
+        DrawString(cx - str_w(kModeNames[i]) / 2, y + 12, kModeNames[i],
+                   sel ? rgb(kCyan) : GetColor(200, 210, 235));
+        SetFontSize(16);
+    }
+
+    const bool ai_mode = (mode != 0);
+    const int dy = diff_top();
+    const char* dlabel = ai_mode ? "AIの強さ" : "AIの強さ（AI対戦のみ）";
+    DrawString(cx - str_w(dlabel) / 2, dy - 26, dlabel, ai_mode ? rgb(kMagenta) : color_dim_text());
+    for (int i = 0; i < kMenuDifficultyCount; ++i) {
+        const int x = diff_left(cx, i);
+        const bool sel = (i == difficulty);
+        const bool hov = ai_mode && in_box(mx, my, x, dy, kMenuDiffW, kMenuDiffH);
+        DrawBox(x, dy, x + kMenuDiffW, dy + kMenuDiffH,
+                (sel && ai_mode) ? GetColor(60, 10, 50) : GetColor(12, 10, 32), TRUE);
+        DrawBox(x, dy, x + kMenuDiffW, dy + kMenuDiffH,
+                ai_mode ? (sel ? rgb(kMagenta) : (hov ? rgb(kMagenta, 0.7f) : GetColor(60, 70, 110)))
+                        : GetColor(40, 45, 70),
+                FALSE);
+        DrawString(x + (kMenuDiffW - str_w(kDiffNames[i])) / 2, dy + 14, kDiffNames[i],
+                   ai_mode ? (sel ? rgb(kMagenta) : GetColor(200, 210, 235)) : GetColor(70, 80, 110));
+    }
+
+    const int sy = start_top(), sx = cx - kMenuStartW / 2;
+    const bool start_hov = in_box(mx, my, sx, sy, kMenuStartW, kMenuStartH);
+    glow(cx, sy + kMenuStartH / 2, 40, kNeonGreen, start_hov ? 50 : 25);
+    DrawBox(sx, sy, sx + kMenuStartW, sy + kMenuStartH, start_hov ? GetColor(10, 60, 10) : GetColor(8, 30, 12), TRUE);
+    DrawBox(sx, sy, sx + kMenuStartW, sy + kMenuStartH, rgb(kNeonGreen), FALSE);
+    const char* start = "ゲーム開始";
+    SetFontSize(24);
+    DrawString(cx - str_w(start) / 2, sy + 13, start, rgb(kNeonGreen));
+    SetFontSize(16);
+
+    const char* help = "↑↓：モード選択　　←→：AIの強さ　　Enter：開始　　ESC：終了";
+    DrawString(cx - str_w(help) / 2, height_ - 30, help, color_dim_text());
+
+    ScreenFlip();
+}
+
+MenuInput DXLibDisplay::handle_menu_input() {
+    MenuInput r;
+    if (ProcessMessage() == -1 || CheckHitKey(KEY_INPUT_ESCAPE)) {
+        r.quit = true;
+        return r;
+    }
+
+    const int keys[5] = {KEY_INPUT_UP, KEY_INPUT_DOWN, KEY_INPUT_LEFT, KEY_INPUT_RIGHT, KEY_INPUT_RETURN};
+    bool down[5];
+    for (int i = 0; i < 5; ++i) down[i] = CheckHitKey(keys[i]) != 0;
+    down[4] = down[4] || CheckHitKey(KEY_INPUT_SPACE) != 0;
+    if (down[0] && !menu_key_prev_[0]) r.move = -1;
+    if (down[1] && !menu_key_prev_[1]) r.move = +1;
+    if (down[2] && !menu_key_prev_[2]) r.diff_move = -1;
+    if (down[3] && !menu_key_prev_[3]) r.diff_move = +1;
+    if (down[4] && !menu_key_prev_[4]) r.confirm = true;
+    for (int i = 0; i < 5; ++i) menu_key_prev_[i] = down[i];
+
+    const bool click = (GetMouseInput() & MOUSE_INPUT_LEFT) != 0;
+    if (click && !menu_click_prev_) {
+        int mx, my;
+        GetMousePoint(&mx, &my);
+        const int cx = width_ / 2;
+        for (int i = 0; i < kMenuModeCount; ++i) {
+            if (in_box(mx, my, cx - kMenuRowW / 2, kMenuRowTop + i * (kMenuRowH + kMenuRowGap), kMenuRowW, kMenuRowH))
+                r.mode_row = i;
+        }
+        for (int i = 0; i < kMenuDifficultyCount; ++i) {
+            if (in_box(mx, my, diff_left(cx, i), diff_top(), kMenuDiffW, kMenuDiffH)) r.difficulty_col = i;
+        }
+        if (in_box(mx, my, cx - kMenuStartW / 2, start_top(), kMenuStartW, kMenuStartH)) r.confirm = true;
+    }
+    menu_click_prev_ = click;
+    return r;
 }
 
 InputResult DXLibDisplay::handle_input(const CubeBoard& board, int8_t turn) {
@@ -331,6 +449,10 @@ InputResult DXLibDisplay::handle_input(const CubeBoard& board, int8_t turn) {
     if (CheckHitKey(KEY_INPUT_R)) {
         result.reset_requested = true;
     }
+    const bool menu_key_down = CheckHitKey(KEY_INPUT_M) != 0;
+    if (menu_key_down && !menu_key_was_down_) result.menu_requested = true;
+    menu_key_was_down_ = menu_key_down;
+
     const bool undo_key_down = CheckHitKey(KEY_INPUT_U) != 0;
     if (undo_key_down && !undo_key_was_down_) {
         result.undo_requested = true;
