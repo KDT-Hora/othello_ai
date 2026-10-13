@@ -1,280 +1,284 @@
 ---
 name: "Cube Othello - C++ DXLib Implementation"
 description: |
-  Cube Othello (8×8×3 cubic board) implemented in C++ with DXLib rendering and TDD-driven development.
-  The game features a flat-plane isometric projection display, simple minimax AI evaluated by stone count,
-  and comprehensive unit + E2E test coverage targeting ≥90%.
-
+  Cube Othello (6×6×6 cubic board, 26-direction flips) implemented in C++ with DXLib rendering
+  and TDD-driven development. The game features a rotatable 3D perspective-projected display,
+  a depth-limited minimax AI with alpha-beta pruning evaluated by stone count, mode selection
+  (human/AI/spectate), undo, and unit test coverage targeting ≥90%.
 short-name: cubo-othello-cpp-dxlib
+spec-version: 2.0
 ---
 
-# Cube Othello — C++/DXLib Specification 🎲
+# Cube Othello — C++/DXLib 仕様書（第2版）🎲
+
+## 改訂履歴
+
+| 版 | 日付 | 内容 |
+|----|------|------|
+| 1.0 | 2026-09 | 初版。8×8×8(512マス)・6軸方向挟み込み・平面等角投影表示として記述 |
+| 2.0 | 2026-10-13 | **実装追従の改訂。** 6×6×6(216マス)・26方向挟み込み・回転可能な遠近投影3D表示・モード選択メニュー・undoを追加。AI探索を alpha-beta 枝刈り+手順整理+増分評価に効率化（指し手の選択基準は従来と同一） |
+
+旧版（8×8×8 記述）は歴史的文書として `specifications/` に保存してある。本書が**現行の正**である。
+
+---
 
 ## Overview
 
-Cube Othello is a 3D extension of the classic Othello (Reversi) game played on an **8×8×8 cube** (512 cells).
-This specification defines the C++ implementation using **DXLib** for rendering and **gtest** for testing.
+Cube Othello はオセロ（リバーシ）の3D拡張。**6×6×6 の立方体（216マス）**上で、**26方向（軸6・面対角12・立体対角8）**の挟み込みでプレイする。C++20 / DXLib（Windows）で実装され、盤面ロジック（DXLib非依存）と GUI 描画が明確に分離されている。
 
 ---
 
 ## User Scenarios & Testing
 
-### Scenario 1: Human vs. Human Play
+### シナリオ1: 二人対戦
 
-> A user launches the game, plays as Black against White on a flat-plane isometric projection view.
+> モードメニューから「二人対戦」を選び、黒と白を手で打つ。
 
-Acceptance Criteria:
-- Game starts with center pieces placed at `(x,y,z) ∈ {3,4}×{3,4}×{3,5}` (8 stones total).
-- The current turn indicator ("BLACK" / "WHITE") updates after each move.
-- Valid moves are marked on the board with a "+" symbol.
-- A stone placed at `(x,y,z)` flips all opponent stones along the 6 axial directions (+/-x, +/-y, +/-z) where a sandwich is formed.
-- If no valid moves exist for either player, the game ends (no-moves condition).
-- The winner is determined by comparing final stone counts; if tied, it's a draw.
-- Pressing `ESC` exits the game loop.
+受け入れ条件:
+- 中央 2×2×2 の市松模様（同色隣接なし）で開始し、黒先手である。
+- 手番表示（黒 / 白）が各手ごとに更新される。
+- 合法手はネオン緑の輪で示される。
+- 石を置くと26方向すべてについて挟み込みを検出し、挟まれた相手の石がすべて自石に反転する。
+- どちらの手もない時点で終局し、石数で勝敗（同数は引き分け）が表示される。
+- `ESC` で終了、`R` で盤面リセット。
 
-### Scenario 2: Human vs. AI Play
+### シナリオ2: AI対戦（難易度3段階）
 
-> A user launches the game and plays against a simple minimax AI that evaluates board state solely by stone count difference (black − white). The AI searches to depth 3 with no pruning.
+> メニューで「AI対戦・黒」「AI対戦・白」を選ぶか、`--ai` / `--ai=black` でメニューを迂回する。AIの強さは easy / normal / hard（探索深さ 1 / 2 / 3）から選ぶ。
 
-Acceptance Criteria:
-- The AI always passes when it has no valid moves.
-- When multiple moves yield equal evaluation, the AI picks one randomly among them.
-- The AI never makes an illegal move.
+受け入れ条件:
+- AIは合法手が存在しないときは必ずパスする。
+- AIは不正な手を打たない。
+- 同一評価の最善手が複数ある場合、その中からランダムに選ぶ。
+- 探索は alpha-beta 枝刈り（根は scout window）で行われ、**同点最善手の集合とそのランダムな選択は無枝刈り探索と一致する**（枝刈りは指し手の選択を変えない。strict に悪い手だけが打ち切られる）。
 
-### Scenario 3: Game Over Conditions
+### シナリオ3: AI同士の観戦
 
-> A user wants to know how and when the game ends.
+> メニューで「AI同士の観戦」を選ぶ。両色がAIで、約0.7秒間隔で対局が進む。
 
-Acceptance Criteria:
-- The game ends if **all** cells are filled → draw.
-- The game ends if both players have no legal moves → declare winner by stone count (or draw if tied).
+受け入れ条件:
+- 人手を介さず終局まで進行し、勝敗表示が出る。
+- `M` でメニューに戻れる。
 
-### Scenario 4: Performance & Resource Usage
+### シナリオ4: 視点操作・プレビュー
 
-> A user wants to know the performance characteristics of the application.
+> 右ドラッグや矢印キーで盤を回転させ、置きたい手を確認する。
 
-Acceptance Criteria:
-- The game runs smoothly at ≥60 FPS on a standard desktop PC.
-- Memory usage stays below ~50 MB during gameplay.
-- The application exits cleanly (no dangling DXLib resources) when closed via `ESC` or process termination.
+受け入れ条件:
+- 右ドラッグ / 矢印キーで視点をyaw・pitch方向に回転できる。`V` で初期視点に戻す。
+- カーソルが乗った合法手は黄色でハイライトされ、そこに置いた場合に反転する石数と対象が表示される（「ここに置くと N 個ひっくり返る（黄色の輪）」）。
+
+### シナリオ5: undo
+
+> `U` で一手戻す。
+
+受け入れ条件:
+- 手ごとの履歴から盤面と手番を復元する。
+- AI対戦で、undo がそのまま AI の手に戻してしまう場合はもう一手遡り、人間に手番が戻る。
+- 新局開始（メニュー確定・`R`）で履歴はクリアされる。
 
 ---
 
 ## Functional Requirements
 
-### FR-001: Board Initialization
+### FR-001: 盤面初期化
 
-**Description:** Initialize the 8×8×8 cube board with center pieces and set game state to "in-progress."
+- 盤面は `grid[6][6][6]` の3D配列。各マスは `-1`（空）, `0`（黒）, `1`（白）。定数として `BOARD_SIZE=6`, `EMPTY=-1`, `BLACK=0`, `WHITE=1`。
+- 中央 2×2×2、座標 `(x,y,z) ∈ {2,3}³` に市松模様で開始石を置く: `(x+y+z) % 2 == 0` → 黒、それ以外 → 白（黒4・白4、同色隣接なし）。
+- `turn = BLACK`。
 
-Acceptance Criteria:
-- The board is represented as a 3D array `grid[8][8][8]` where each cell holds `-1` (empty), `0` (Black), or `+1` (White).
-- Center stones are placed at coordinates `(x,y,z)` with `x∈{3,4}`, `y∈{3,4}`, `z∈{3,5}`:
-  - Black at `(3,3,3)`, `(3,3,4)`, `(3,4,3)`, `(3,4,4)`
-  - White at `(4,3,3)`, `(4,3,4)`, `(4,4,3)`, `(4,4,4)`
-- `turn` is set to `BLACK`.
-- `game_over` flag is false.
+### FR-002: 石の配置と反転（26方向）
 
-### FR-002: Placing a Stone
+- 配置は空マスでなければならない。
+- **26方向**（`(dx,dy,z) ∈ {-1,0,1}³ \ {(0,0,0)}`：軸6・面対角12・立体対角8）それぞれについて隣接から外へ走査し、相手の石の連なりの先に自色の石があれば挟み込み成立。その連なりをすべて反転する。
+- 反転数を返す。0 の場合その手は不正であり盤面は変化しない。
+- API: `place_stone()`（反転数を返す）, `flips_for()`（盤面を変えずに反転対象を返す）, および探索用の `apply_move()` / `undo_move()`（FR-011参照）。
 
-**Description:** Place a stone of the given color at the specified cell and flip all sandwiched opponent stones along each axis direction.
+### FR-003: 合法手の列挙
 
-Acceptance Criteria:
-- The move must be on an empty cell; otherwise return error.
-- For each of the 6 directions (`+x`, `-x`, `+y`, `-y`, `+z`, `-z`), scan from the immediate neighbor outward:
-  - If a sequence of opponent stones is found followed by one's own color, flip all those opponent stones and record their positions.
-- After flipping, update the board state with the new stone and flipped stones (all become the placing player's color).
-- Return the count of flipped stones; if zero, this move is invalid under Othello rules.
+- 全空マスを走査し、少なくとも1方向で挟み込みが成立するマスを列挙する。
+- `valid_moves(color)` は手の列表、`legal_moves_with_flips(color)` は各手の反転列表を伴う同一集合を返す（両者は常に一致することを単体テストで保証）。
 
-### FR-003: Valid Move Detection
+### FR-004: 手番の移動とパス
 
-**Description:** Identify all empty cells from which a legal move can be made (i.e., sandwiches opponent stones in at least one direction).
+- 配置成功後は相手へ手番を渡す。相手に合法手がない場合は現手番が打ち続ける（パス）。
+- 両手に合法手がない状態は FR-005 の終局判定で検出する。
 
-Acceptance Criteria:
-- Return a list of `(x,y,z)` tuples representing valid moves for the given player.
-- A cell is valid only if placing a stone there results in ≥1 flip along some axis.
-- The move count must be ≤512 (full board).
+### FR-005: 終局判定
 
-### FR-004: Turn Switching
+- 全216マスが埋まった → `Full`。
+- 両者に合法手がない → `NoMoves`。
+- それ以外 → `InProgress`。
 
-**Description:** Advance turn from current player to opponent after a successful placement and flip operation.
+### FR-006: 勝敗判定
 
-Acceptance Criteria:
-- If the placing player has no valid moves, they pass their turn; the game ends if both players lack legal moves.
-- Otherwise, switch `turn` from `BLACK` → `WHITE` or vice versa.
+- 終局時に石数を比較し、多い側の勝ち。同数は引き分け。結果メッセージを HUD に表示する。
 
-### FR-005: Game Over Detection
+### FR-007: 描画 — 回転可能な3D遠近投影
 
-**Description:** Determine whether the game should terminate and why.
+- 盤はワイヤーフレームの面・内部グリッド・石で構成される。視点（yaw/pitch）回転後、奥行きに基づく遠近係数でスクリーンへ射影する（手前のマスほど大きく見える）。遮蔽（隠す順）は画家のアルゴリズムで描画順により近似する。
+- 論理的な初期サイズは 120×80 だが、実運用ではマウス操作に十分な 960×640 に拡大して起動する（射影計算は解像度に依存しない）。
+- 石の色: 黒=シアン系、白=マゼンタ系（サイバーパンク調の配色。HUD・メニューも同系統）。奥の石は明るさを落とす。
+- 合法手にはネオン緑の輪。ホバー中の合法手は黄色の輪+反転プレビュー。HUD に手番・石数・状態メッセージを表示する。
 
-Acceptance Criteria:
-- Return `GAME_OVER_FULL` if all 512 cells are occupied.
-- Return `GAME_OVER_NO_MOVES` if both players have zero legal moves.
-- Otherwise return `GAME_IN_PROGRESS`.
+### FR-008: 入力処理
 
-### FR-006: Stone Count & Result Evaluation
+- `ESC` 終了 / `R` 盤面リセット / `U` undo / `M` モードメニューへ / `V` 視点リセット。
+- 左クリックで合法手に配置（1クリック1手。押しっぱなしの連打防止にエッジ検出）。
+- 右ドラッグ・矢印キーで視点回転。ピッキングは視点に最も近い合法手を優先する。
 
-**Description:** Compute final stone counts and determine the winner or draw.
+### FR-009: モード選択メニュー
 
-Acceptance Criteria:
-- Black wins if black stones > white stones at game end.
-- White wins if white stones > black stones.
-- Draw if both counts are equal (or if the board is full with no decisive outcome).
+- モード4種（二人対戦 / AI対戦・黒 / AI対戦・白 / AI同士の観戦）× 難易度3段階（easy/normal/hard = 探索深さ 1/2/3）。
+- マウスクリックとキーボード（矢印で選択、Enter/Space で決定）の両方に対応する。
+- 起動時にメニューを表示しない CLI フラグ: `--ai`（人間黒 vs AI白）, `--ai=black`（AI黒）。
 
-### FR-007: Rendering — Flat-Plane Isometric Projection
+### FR-010: undo 履歴
 
-**Description:** Render the cube board using DXLib in a 2D flat-plane view that visually approximates an isometric projection, without true depth layering or occlusion.
+- 配置直前に `(盤面, 手番)` のスナップショットを積む。undo は最上位を復元して破棄する。
+- AI対戦で AI の手へ手番が戻る場合は追加でもう一手遡る（人間が即座に打ち直せるようにするため）。
 
-Acceptance Criteria:
-- The window size defaults to `120×80×480` pixels (width × height × depth buffer) but can be configured via DXLib init parameters.
-- Each cell at `(x,y)` is drawn as a small ellipse/circle with color determined by its content (`.` / `B` / `W`).
-- The z-axis (depth) is represented only by **ambient lighting variation**: front-facing cells are brighter, rear cells darker.
-  - Lighting formula: `light = max(0.3f, 1.0f - (double)z / 7.0 * 0.5f)` — front (`z=0`) is brightest (~1.0), back (`z=7`) is darkest (~0.29).
-- The grid lines are drawn to delineate the three visible cube faces, giving a pseudo-3D appearance without true perspective distortion.
-- A "+" marker is drawn above valid move cells (for both players).
+### FR-011: 探索用 make/unmake API（AI効率化のための盤面API拡張）
 
-### FR-008: Rendering — Stone Appearance
-
-**Description:** Draw each stone as an ellipse with shading appropriate for its color and depth position.
-
-Acceptance Criteria:
-- Black stones are rendered as dark gray ellipses (`#3a4a5e` fill, darker stroke).
-- White stones are rendered as light gray to off-white ellipses (`#f0f0f5` fill, lighter stroke).
-- An optional inner shadow or highlight can be added using elliptical fills with slightly shifted centers.
-
-### FR-009: Rendering — Input Handling
-
-**Description:** Capture user input (keyboard and mouse) for gameplay interaction.
-
-Acceptance Criteria:
-- Pressing `ESC` terminates the game loop cleanly.
-- Mouse clicks on a valid move cell trigger that player's turn.
-- Pressing `R` resets the board to initial state without ending the game.
+- `apply_move(x,y,z,color)`: 配置+反転を適用し、反転された石列表を返す（不正なら空返しで盤面不変）。
+- `undo_move(placed, flipped, color)`: `apply_move` を正確に巻き戻す（置いたマスを空にし、反転石を元の相手色に戻す）。
+- 呼び出し側（AI探索）は板コピーなしで make/unmake できる。
 
 ---
 
 ## Non-Functional Requirements
 
-### NFR-001: Performance
+### NFR-001: 描画パフォーマンス
 
-**Description:** The application must maintain smooth frame rates and responsive input handling.
+- 標準デスクトップPCで ≥60 FPS を目標。`cubo_perf_benchmark` で FPS とピークメモリを実測する（DXLib/Direct3D の実測値を報告し、閾値で合否は判定しない — benchmark の注記参照）。
 
-Acceptance Criteria:
-- Render loop targets ≥60 FPS on a standard desktop PC (Windows 7/8/10).
-- Move validation completes within ≤5 ms per candidate cell for the first pass; full board scan is bounded by O(N) where N=512 → worst-case ~1.5 μs, trivially met.
+### NFR-002: ビルドと移植性
 
-### NFR-002: Build & Compilation
+- MSVC (Visual Studio 2022 以降) / C++20 / CMake ≥ 3.21 / vcpkg マニフェスト（gtest）。
+- DXLib が `third_party/DxLib/` に存在しない場合、GUI 実行体はスキップしロジック単体テストのみビルドする。
 
-**Description:** The project builds cleanly with no warnings using Visual Studio 2022 (or MinGW-w64 g++).
+### NFR-003: テストカバレッジ
 
-Acceptance Criteria:
-- `cmake .. -G "Visual Studio 17 2022"` followed by `cmake --build . --config Release` completes without errors.
-- All tests pass via `ctest`.
+- OpenCppCoverage による `coverage` ターゲットで、ゲームエンジンロジックの ≥90% を目標とする。
 
-### NFR-003: Unit Test Coverage
+### NFR-004: AI応答時間（2.0で追加）
 
-**Description:** Achieve ≥90% branch/line coverage over game engine logic using gtest + gcov/lcov.
-
-Acceptance Criteria:
-- Every public method of `CubeBoard` has at least one test case covering all branches (success, failure paths).
-- The same applies to `SimpleAI`'s evaluate and search methods.
-- Coverage report (`coverage_report/index.html`) shows ≥90% coverage for the game engine module.
+- 深さ3の指し手選択は alpha-beta 枝刈り（根は scout window）・反転数順の手順整理・増分評価により、実時間で Interactive な速度（Debugビルドで1手 <0.5秒、観戦モードの0.7秒間隔を下回らない程度）で完了すること。
+- 探索は単一の作業盤面に対して make/unmake で行い、ノードごとに盤面コピーや確保を行わない。
+- 実測値は付録Bに記録する（`cubo_perf_benchmark` とは別に、差分検証ハーネスで計測）。
 
 ---
 
 ## Data Model
 
-### Entity: `BoardCell`
+### Entity: `BoardCell` / `Move`
 
-| Field | Type    | Description                         |
-|-------|---------|-------------------------------------|
-| x     | int32   | Column index (0..7)                |
-| y     | int32   | Row index (0..7)                   |
-| z     | int32   | Depth layer (0..7), front→back     |
-| color | int8    | -1 = empty, 0 = Black, +1 = White  |
+| Field | Type  | Description |
+|-------|-------|-------------|
+| x     | int   | 0..5 |
+| y     | int   | 0..5 |
+| z     | int   | 0..5 |
+| color | int8  | -1 = 空, 0 = 黒, 1 = 白 |
 
-### Entity: `GameState`
+### Entity: `LegalMove`（FR-003/FR-011）
 
-| Field        | Type | Description                          |
-|--------------|------|--------------------------------------|
-| turn         | int8 | Current player (-1=unstarted, 0=B, 1=W) |
-| game_over    | bool | Whether the game has terminated     |
-| result_code  | int  | 0=in_progress, 1=BLACK_WINS, 2=DRAW, 3=NO_MOVES |
+| Field  | Type          | Description |
+|--------|---------------|-------------|
+| move   | Move          | 合法手 |
+| flips  | vector\<Move> | その手で反転する石の列表 |
 
-### Entity: `DXLibDisplay` (rendering layer)
+### Class: `CubeBoard`（純ロジック・DXLib非依存・コピー可能）
 
-| Method                  | Description                                                    |
-|-------------------------|-----------------------------------------------------------------|
-| init(width, height)     | Initialize DXLib window and render context                     |
-| render_frame()         | Render one frame: background → grid faces → stones → markers  |
-| draw_cube_faces()      | Draw the wireframe of the three visible cube faces             |
-| draw_grid()            | Draw internal grid lines                                        |
-| draw_stones(board)     | Draw all 512 stone ellipses with depth-based lighting          |
-| mark_valid_moves(...)  | Overlay "+" markers on valid move cells                        |
-| handle_input()         | Process key/mouse events; return true if frame should continue |
+初期化/クリア、`at`, `place_stone`, `flips_for`, `valid_moves`, `legal_moves_with_flips`, `apply_move`, `undo_move`, `has_valid_moves`, `game_over_reason`, `count`, `evaluate`（黒石数−白石数）。手番は保持しない（GameEngine が管理）。
+
+### Class: `SimpleAI`
+
+深さ限定ミニマックス。評価は石数差（自色視点の増分値を探索中に追跡）。alpha-beta 枝刈り、反転数降順の手順整理、単一作業盤面での make/unmake。根ノードは scout window（α = 現在best − 1, β = +∞）で探索される: best と並ぶか上回る手は厳密値で探索され、strict に悪い手は枝刈りされるため、同点最善手の集合・そのランダムタイブレーク挙動は無枝刈り版と同一。
 
 ---
 
 ## Constraints & Assumptions
 
-### Assumptions
-
-- The target platform is Windows (DXLib). DXLib cross-compilation to Linux/macOS is not in scope.
-- No network or external services are involved; the game runs entirely locally.
-- DXLib version ≥2.0 is assumed available on the system.
-
-### Constraints
-
-- **No** use of OpenGL, DirectX, SFML, SDL, etc. — only DXLib's 2D graphics API.
-- The isometric projection remains a **flat-plane approximation**; no true z-buffer occlusion is used for performance simplicity.
-- AI evaluation uses **only stone count difference**; no lookahead beyond depth=3 and no pruning is required (minimax without alpha-beta is acceptable).
+- 対象プラットフォームは Windows（DXLib）。ネットワーク・外部サービスなし。
+- OpenGL/DirectX/SFML 等は使わず DXLib の 2D API のみ（遠近投影は自前の射影計算）。
+- AI 評価関数は石数差のみ。位置価値（corner 等）や開局面手帳は対象外。
+- 枝刈り・順序付けは探索の**速度**最適化であり、選手指し手の意味論（最善手集合とランダムタイブレーク）は無枝刈り探索と一致しなければならない。
 
 ---
 
 ## Glossary
 
-| Term       | Meaning                                                    |
-|------------|-------------------------------------------------------------|
-| Cube Othello | A 3D extension of Othello played on an 8×8×8 cube          |
-| Sandwich   | Placing a stone such that opponent pieces are "sandwiched" between your own on one or more axial lines |
-| Flip       | Convert all sandwiched opponent stones to your color        |
-| Flat-Plane Isometric Projection | A pseudo-3D view rendered via 2D projections with z-based lighting, without true occlusion |
+| 用語 | 意味 |
+|------|------|
+| Cube Othello | 6×6×6 の立方体盤で行うオセロの3D拡張 |
+| Sandwich（挟み込み） | 26方向のいずれかの直線上で、相手の石の連なりを自石で挟むこと |
+| Flip | 挟まれた相手の石をすべて自色に変換する |
+| Alpha-beta 枝刈り | 既に確定した上下窓を越えた分岐を打ち切るミニマックスの高速化 |
+| make/unmake | 盤面コピーの代わりに手適用と巻き戻しで探索する技法 |
+| 増分評価 | 葉で石数を再集計せず、手ごとの差分（2f+1）を伝播させる |
 
 ---
 
-## Appendix: Algorithmic Details
+## Appendix A: アルゴリズム詳細
 
-### Sandwich Detection (per direction)
-
-```text
-For each of the six directions (+x,-x,+y,-y,+z,-z):
-  current = neighbor in that direction
-  while current is within bounds:
-    if current == opponent_color → extend sequence
-    else if current == my_color and sequence length ≥ 1 → record sandwich, break loop
-    else if current == empty or same color as me already placed → stop scanning this direction
-```
-
-### Isometric Projection Mapping (flat-plane approximation)
+### 挟み込み検出（各方向）
 
 ```text
-projected_x = x * 0.5 - y * 0.268   // maps to horizontal screen coordinate
-projected_y = y * 0.5 + z * 0.268   // maps to vertical screen coordinate
-lighting    = max(0.3f, 1.0f - (double)z / 7.0 * 0.5f)
+for each of the 26 directions (dx,dy,dz) ∈ {-1,0,1}³ \ {(0,0,0)}:
+  run ← 空
+  cur ← 手 (x,y,z) + (dx,dy,dz)
+  while cur が盤内 and cur == 相手色:
+      run に cur を追加; cur += (dx,dy,dz)
+  if run が非空 and cur が盤内 and cur == 自色:
+      run 全体が反転対象
 ```
 
-### Evaluation Function (for AI)
+### 視点射影（display.cpp）
 
 ```text
-score(board) = count(black_stones) − count(white_stones)
+盤空間点 (px,py,pz) を yaw（画面鉛直軸）→ pitch（画面水平軸）の順で回転し、
+奥行き depth と遠近係数 scale を用いてスクリーン座標へ除算射影する。
+scale は視点に近い点ほど大きい（手前のマスほど大きく描画される）。
 ```
 
-The minimax search uses this score at each leaf node; the player with the higher score is preferred. Depth is capped at 3 plies to maintain responsiveness.
+### 評価関数と増分更新（AI）
+
+```text
+score(board) = count(自色) − count(相手色)          // 葉での厳密値（従来と同じ）
+手による増分: score' = score ± (2·f + 1)            // f = 反転数。自色の手なら +、相手の手なら −
+```
+
+### Alpha-beta と根ノードの厳密性（scout window）
+
+根では各合法手を降順（反転数順）に調べ、窓を (α, β) = (現在までのbest − 1, +∞) として探索する。
+
+- 戻り値 ≤ α の手は「現在の best より strict に悪い」ことが保証される（fail-low 上限）。同点集合から正しく除外できる。
+- 真の値 ≥ best の手は必ず α を超えるため厳密値で返る（β = +∞ なので fail-high が起こらない）。同点手を取り逃さない。
+
+よって同点最善手の集合とそのランダム選択は無枝刈り探索と一致する。weak な根の部分木は根をまたいで枝刈りされる。内部ノードでの打ち切りは速度目的であり、根の結果（上記2項）に影響しない。
+
+---
+
+## Appendix B: 実測（2026-10-13, MSVC Debugビルド, `cubo_ai_equiv_harness`）
+
+`tests/ai_search_equivalence_harness.cpp`（CMakeターゲット `cubo_ai_equiv_harness`、ctest外の手動実行）による実測値。検証対象は「開局から無作為な合法手で進行した現実的な盤面」で、無枝刈り探索を基準実装としてそのまま使用。
+
+```text
+correctness: 48 (position,color,depth) cases checked, 0 failures (reference nodes explored: 1443660)
+apply/undo round-trip: 0 failures
+midgame depth-3 timing: new(alpha-beta) 445.7 ms vs old(full-width) 5986.6 ms
+                        (13.4x speedup; 297834 reference nodes; legal root moves=69; stones B/W=36/32)
+OVERALL: PASS
+```
+
+- 正しい手選択: 深さ1〜3・両色・開局〜中盤の48ケースで、選択手がすべて無枝刈り探索の最適集合に含まれる（0不一致）。`choose_move` は呼び出し側の盤面を変えない。
+- 速度: 中盤（石数36/32、合法手69）深さ3で **13.4倍**。Releaseビルドではさらに速くなる。
 
 ---
 
 ## Success Criteria (Summary)
 
-1. ✅ The game runs end-to-end: initialization → placement & flipping → turn switching → game over detection → winner announcement.
-2. ✅ The flat-plane isometric view renders smoothly with proper stone shading and valid-move markers.
-3. ✅ The AI plays reasonably well within depth-3 minimax, never making illegal moves.
-4. ✅ Unit tests cover ≥90% of the codebase; E2E scenarios pass for both human-vs-human and human-vs-AI modes.
+1. ✅ 初期化 → 配置・反転（26方向） → 手番移動 → 終局判定 → 勝敗表示が通る。
+2. ✅ 回転可能な遠近投影ビューで石・合法手マーク・ホバープレビューが正しく描画される。
+3. ✅ AI は深さ1〜3で不正手を打たず、無枝刈り探索と同じ最善手集合から選択する。探索は実時間。
+4. ✅ 単体テスト（盤面/AI/ゲームエンジン）とカバレッジ計測が揃っている。
