@@ -1,7 +1,7 @@
 # Cube Othello (6×6×6) — C++20 / DXLib
 
 3D 拡張オセロ。6×6×6 の立方体（216マス）上で、26方向（縦・横・斜め）の挟み込みでプレイする。
-盤面ロジック + 深さ3のミニマックス AI + DXLib による回転可能な3D透視投影レンダリングで構成される。
+盤面ロジック + alpha-beta枝刈り付きミニマックス AI（深さ1〜3、反転数順の手順整理、増分評価）+ DXLib による回転可能な3D透視投影レンダリングで構成される。
 詳細な仕様は [`specs/cubo-othello/spec.md`](specs/cubo-othello/spec.md) を参照。
 
 ## 📁 プロジェクト構成
@@ -11,7 +11,7 @@ CMakeLists.txt         # ビルド設定 (C++20 / vcpkg manifest / DXLib)
 vcpkg.json              # vcpkg 依存関係 (gtest)
 src/
   board.hpp/.cpp        # CubeBoard — 盤面状態とルール（純粋ロジック、DXLib非依存）
-  ai_player.hpp/.cpp     # SimpleAI — 深さ限定ミニマックス（枝刈りなし、石数差評価）
+  ai_player.hpp/.cpp     # SimpleAI — alpha-beta枝刈りミニマックス（反転数順の手順整理、増分石数評価、make/unmake）
   display.hpp/.cpp       # DXLibDisplay — 回転可能な3D透視投影レンダリング + 入力処理
   game_engine.hpp/.cpp   # GameEngine — 手番管理・パス判定・メインループ
   main.cpp               # WinMain エントリポイント

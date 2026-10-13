@@ -69,26 +69,43 @@ std::vector<Move> CubeBoard::scan_flips(int x, int y, int z, int8_t color) const
     return flips;
 }
 
-int CubeBoard::place_stone(int x, int y, int z, int8_t color) {
+std::vector<Move> CubeBoard::apply_move(int x, int y, int z, int8_t color) {
     auto flips = scan_flips(x, y, z, color);
-    if (flips.empty()) return 0;
+    if (flips.empty()) return {};
 
     grid_[x][y][z] = color;
     for (const auto& m : flips) grid_[m.x][m.y][m.z] = color;
 
-    return static_cast<int>(flips.size());
+    return flips;
 }
 
-std::vector<Move> CubeBoard::valid_moves(int8_t color) const {
-    std::vector<Move> moves;
+void CubeBoard::undo_move(const Move& placed, const std::vector<Move>& flipped, int8_t color) {
+    const int8_t opponent = (color == BLACK) ? WHITE : BLACK;
+    grid_[placed.x][placed.y][placed.z] = EMPTY;
+    for (const auto& m : flipped) grid_[m.x][m.y][m.z] = opponent;
+}
+
+int CubeBoard::place_stone(int x, int y, int z, int8_t color) {
+    return static_cast<int>(apply_move(x, y, z, color).size());
+}
+
+std::vector<LegalMove> CubeBoard::legal_moves_with_flips(int8_t color) const {
+    std::vector<LegalMove> moves;
     for (int x = 0; x < BOARD_SIZE; ++x) {
         for (int y = 0; y < BOARD_SIZE; ++y) {
             for (int z = 0; z < BOARD_SIZE; ++z) {
                 if (grid_[x][y][z] != EMPTY) continue;
-                if (!scan_flips(x, y, z, color).empty()) moves.push_back({x, y, z});
+                auto flips = scan_flips(x, y, z, color);
+                if (!flips.empty()) moves.push_back({{x, y, z}, std::move(flips)});
             }
         }
     }
+    return moves;
+}
+
+std::vector<Move> CubeBoard::valid_moves(int8_t color) const {
+    std::vector<Move> moves;
+    for (const auto& lm : legal_moves_with_flips(color)) moves.push_back(lm.move);
     return moves;
 }
 

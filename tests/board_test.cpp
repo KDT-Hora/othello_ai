@@ -283,3 +283,61 @@ TEST(CubeBoard, FlipsForIsEmptyForIllegalMoves) {
     EXPECT_TRUE(board.flips_for(0, 0, 0, BLACK).empty()); // no sandwich
     EXPECT_TRUE(board.flips_for(3, 3, 3, BLACK).empty()); // occupied
 }
+
+TEST(CubeBoard, ApplyMoveReturnsFlipsAndUndoRestoresTheBoardExactly) {
+    CubeBoard board;
+    board.clear();
+    board.set_for_testing(1, 0, 0, WHITE);
+    board.set_for_testing(2, 0, 0, WHITE);
+    board.set_for_testing(3, 0, 0, BLACK);
+    board.set_for_testing(1, 1, 1, WHITE);
+    board.set_for_testing(2, 2, 2, BLACK);
+
+    const CubeBoard reference = board; // snapshot to compare the undo against
+
+    const auto flips = board.apply_move(0, 0, 0, BLACK);
+    ASSERT_EQ(flips.size(), 3u); // same set flips_for previews: +x run of 2 and diagonal 1
+    EXPECT_EQ(board.at(0, 0, 0), BLACK);
+    // 2 pre-existing black + placed stone + 3 flipped = 6; all 3 whites got flipped to 0.
+    EXPECT_EQ(board.count(BLACK), 6);
+    EXPECT_EQ(board.count(WHITE), 0);
+
+    board.undo_move({0, 0, 0}, flips, BLACK);
+    for (int x = 0; x < BOARD_SIZE; ++x)
+        for (int y = 0; y < BOARD_SIZE; ++y)
+            for (int z = 0; z < BOARD_SIZE; ++z)
+                EXPECT_EQ(board.at(x, y, z), reference.at(x, y, z))
+                    << "cell (" << x << "," << y << "," << z << ") not restored";
+}
+
+TEST(CubeBoard, ApplyMoveOnIllegalCellReturnsEmptyAndLeavesBoardUnchanged) {
+    CubeBoard board; // standard opening: (0,0,0) has no sandwich
+    const auto flips = board.apply_move(0, 0, 0, BLACK);
+    EXPECT_TRUE(flips.empty());
+    EXPECT_EQ(board.at(0, 0, 0), EMPTY);
+    EXPECT_EQ(board.count(BLACK), 4);
+}
+
+TEST(CubeBoard, LegalMovesWithFlipsAgreesWithValidMovesAndFlipsFor) {
+    CubeBoard board; // standard opening
+    for (const int8_t color : {BLACK, WHITE}) {
+        const auto with_flips = board.legal_moves_with_flips(color);
+        const auto plain = board.valid_moves(color);
+
+        ASSERT_EQ(with_flips.size(), plain.size());
+        for (std::size_t i = 0; i < with_flips.size(); ++i) {
+            EXPECT_EQ(with_flips[i].move.x, plain[i].x);
+            EXPECT_EQ(with_flips[i].move.y, plain[i].y);
+            EXPECT_EQ(with_flips[i].move.z, plain[i].z);
+
+            const auto preview = board.flips_for(with_flips[i].move.x, with_flips[i].move.y,
+                                                 with_flips[i].move.z, color);
+            ASSERT_EQ(with_flips[i].flips.size(), preview.size());
+            for (std::size_t j = 0; j < preview.size(); ++j) {
+                EXPECT_EQ(with_flips[i].flips[j].x, preview[j].x);
+                EXPECT_EQ(with_flips[i].flips[j].y, preview[j].y);
+                EXPECT_EQ(with_flips[i].flips[j].z, preview[j].z);
+            }
+        }
+    }
+}

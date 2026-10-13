@@ -21,6 +21,14 @@ struct Move {
     int z{};
 };
 
+// A legal move together with the opponent stones it would flip. Produced by
+// legal_moves_with_flips(); consumed by apply_move()/undo_move() so a search
+// can make and unmake a move without rescanning the board or copying it.
+struct LegalMove {
+    Move move;
+    std::vector<Move> flips;
+};
+
 // Pure board-state/rules class. Does not track whose turn it is --
 // that is orchestrated by GameEngine, which keeps CubeBoard trivially
 // testable and safe to copy for AI search.
@@ -54,7 +62,23 @@ public:
 
     // All empty cells from which `color` has at least one legal move.
     std::vector<Move> valid_moves(int8_t color) const;
+
+    // Same enumeration as valid_moves(), but each move carries the flip list
+    // it produces, so callers (AI search) can apply/undo it without re-scanning.
+    std::vector<LegalMove> legal_moves_with_flips(int8_t color) const;
+
     bool has_valid_moves(int8_t color) const;
+
+    // Places `color` and applies the flips, returning the flipped cells so the
+    // caller can revert them with undo_move(). Empty result = illegal move and
+    // the board is left unchanged. Production code for search should use this
+    // pair instead of copying the whole board per node.
+    std::vector<Move> apply_move(int x, int y, int z, int8_t color);
+
+    // Reverts an apply_move(): empties `placed` and restores every flipped
+    // stone to the opponent's original color. Assumes `flips` came from
+    // applying `placed` for `color` on this board.
+    void undo_move(const Move& placed, const std::vector<Move>& flipped, int8_t color);
 
     GameOverReason game_over_reason() const;
 

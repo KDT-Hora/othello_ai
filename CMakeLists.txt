@@ -30,6 +30,18 @@ include(GoogleTest)
 gtest_discover_tests(cubo_tests)
 
 # ---------------------------------------------------------------------------
+# AI search equivalence harness — manual run, not part of ctest (no DXLib).
+# Verifies the alpha-beta SimpleAI against the original unpruned brute-force
+# search on realistic positions and times old vs new. See the file header.
+# ---------------------------------------------------------------------------
+add_executable(cubo_ai_equiv_harness
+    tests/ai_search_equivalence_harness.cpp
+    src/board.cpp
+    src/ai_player.cpp
+)
+target_include_directories(cubo_ai_equiv_harness PRIVATE src)
+
+# ---------------------------------------------------------------------------
 # Coverage report (NFR-003). gcov/lcov are GCC-toolchain tools and do not
 # apply to this MSVC build; OpenCppCoverage is the Windows/MSVC equivalent
 # and produces a comparable HTML report.
