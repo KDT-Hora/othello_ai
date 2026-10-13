@@ -61,6 +61,8 @@ int GameEngine::run() {
                 start_game(ai_color, kDifficultyDepth[difficulty], spectate);
                 display_.set_ai_color(ai_color);
                 display_.set_spectate(spectate);
+                display_.clear_effects();
+                display_.reset_view(); // undo the menu's demo-board rotation
                 last_ai_move_ms = GetNowCount();
                 in_menu = false;
             }
@@ -78,6 +80,7 @@ int GameEngine::run() {
 
         if (input.menu_requested) {
             in_menu = true;
+            display_.clear_effects();
             continue;
         }
 
@@ -85,11 +88,13 @@ int GameEngine::run() {
             board_.initialize();
             turn_ = BLACK;
             history_.clear();
+            display_.clear_effects();
             continue;
         }
 
         if (input.undo_requested) {
             undo();
+            display_.clear_effects(); // no stale animations around an undone move
             continue;
         }
 
@@ -105,13 +110,15 @@ int GameEngine::run() {
             auto move = current_ai->choose_move(board_);
             if (move) {
                 push_history();
-                board_.place_stone(move->x, move->y, move->z, turn_);
+                const auto flips = board_.apply_move(move->x, move->y, move->z, turn_);
+                display_.notify_move(*move, flips, turn_); // pop / flip / spark animation
                 advance_turn();
             }
         } else if (input.clicked_move) {
             const Move& mv = *input.clicked_move;
             push_history();
-            board_.place_stone(mv.x, mv.y, mv.z, turn_);
+            const auto flips = board_.apply_move(mv.x, mv.y, mv.z, turn_);
+            display_.notify_move(mv, flips, turn_); // pop / flip / spark animation
             advance_turn();
         }
     }

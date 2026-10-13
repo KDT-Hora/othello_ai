@@ -53,6 +53,41 @@ void neon_line(int x1, int y1, int x2, int y2, const int (&c)[3], int alpha) {
     DrawLine(x1, y1, x2, y2, rgb(c), 1);
 }
 
+// Stone core fills (kept as arrays so a flipping stone can lerp between them).
+constexpr int kBlackCore[3] = {12, 18, 40};
+constexpr int kWhiteCore[3] = {255, 235, 255};
+
+// --- move-animation timings (ms) ---
+constexpr long long kPlaceAnimMs = 260; // placed-stone pop-in with overshoot
+constexpr long long kFlipAnimMs = 430;  // flipped-stone color transition
+constexpr long long kShakeMs = 280;     // screen-shake decay
+
+float clamp01(float t) { return t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t); }
+
+// Overshoot easing for the placed-stone pop (grows past full size, settles).
+float ease_out_back(float t) {
+    const float c1 = 1.70158f, c3 = c1 + 1.0f;
+    const float u = t - 1.0f;
+    return 1.0f + c3 * u * u * u + c1 * u * u;
+}
+
+// Linear blend of two palette colors, then shaded by `light` like rgb().
+unsigned int mix_color(const int (&a)[3], const int (&b)[3], float t, float light) {
+    const float u = clamp01(t);
+    return GetColor(shade(static_cast<int>(a[0] + (b[0] - a[0]) * u), light),
+                    shade(static_cast<int>(a[1] + (b[1] - a[1]) * u), light),
+                    shade(static_cast<int>(a[2] + (b[2] - a[2]) * u), light));
+}
+
+// Deterministic hash for the twinkling starfield positions.
+unsigned int star_hash(unsigned int i) {
+    i *= 2654435761u;
+    i ^= i >> 15;
+    i *= 2246822519u;
+    i ^= i >> 13;
+    return i;
+}
+
 void draw_background(int w, int h) {
     for (int y = 0; y < h; ++y) {
         const float t = static_cast<float>(y) / static_cast<float>(h);
@@ -61,6 +96,28 @@ void draw_background(int w, int h) {
     // CRT scanlines.
     SetDrawBlendMode(DX_BLENDMODE_ALPHA, 45);
     for (int y = 0; y < h; y += 3) DrawLine(0, y, w, y, GetColor(0, 0, 0));
+    SetDrawBlendMode(DX_BLENDMODE_NOBLEND, 0);
+
+    // Twinkling starfield: deterministic positions, sine-wave alpha.
+    const long long now = GetNowCount();
+    for (int i = 0; i < 70; ++i) {
+        const unsigned int hsh = star_hash(static_cast<unsigned int>(i) + 1u);
+        const int x = static_cast<int>(hsh % static_cast<unsigned int>(w));
+        const int y = static_cast<int>((hsh >> 16) % static_cast<unsigned int>(h));
+        const float tw = 0.5f + 0.5f * std::sin(static_cast<float>(now) * 0.001f + i * 0.7f);
+        SetDrawBlendMode(DX_BLENDMODE_ADD, static_cast<int>(30.0f + 120.0f * tw));
+        const unsigned int col = (i % 5 == 0) ? GetColor(160, 220, 255)
+                               : (i % 7 == 0) ? GetColor(255, 170, 230)
+                                              : GetColor(140, 160, 210);
+        DrawCircle(x, y, (i % 9 == 0) ? 2 : 1, col, TRUE);
+    }
+
+    // Slow CRT band sweeping downward for a live-screen feel.
+    const int band = static_cast<int>(now * 0.05) % (h + 140) - 70;
+    for (int dy = 0; dy < 4; ++dy) {
+        SetDrawBlendMode(DX_BLENDMODE_ADD, 22 - 5 * dy);
+        DrawLine(0, band + dy, w, band + dy, GetColor(90, 170, 230));
+    }
     SetDrawBlendMode(DX_BLENDMODE_NOBLEND, 0);
 }
 
@@ -120,6 +177,9 @@ void DXLibDisplay::project(float px, float py, float pz, float& sx, float& sy, f
     depth = z2;
     sx = static_cast<float>(width_) * 0.5f + x1 * kSpacing * scale;
     sy = static_cast<float>(height_) * 0.5f + y2 * kSpacing * scale;
+    // Decaying screen shake (set by render_frame right after a move).
+    sx += shake_x_;
+    sy += shake_y_;
 }
 
 void DXLibDisplay::draw_cube_faces() {
@@ -210,6 +270,15 @@ void DXLibDisplay::draw_stones(const CubeBoard& board) {
     // Painter's algorithm: far cells first so near stones cover them.
     std::sort(cells.begin(), cells.end(), [](const Cell& a, const Cell& b) { return a.depth > b.depth; });
 
+    // Is a move animation currently playing? (render_frame expires move_fx_.)
+    const long long now = GetNowCount();
+    bool fx_active = false;
+    long long fx_age = 0;
+    if (move_fx_.has_value()) {
+        fx_age = now - move_fx_->t0_ms;
+        fx_active = fx_age < kFlipAnimMs + 120;
+    }
+
     for (const auto& c : cells) {
         float sxf, syf, depth, scale;
         project(static_cast<float>(c.x), static_cast<float>(c.y), static_cast<float>(c.z), sxf, syf, depth,
@@ -226,19 +295,72 @@ void DXLibDisplay::draw_stones(const CubeBoard& board) {
             continue;
         }
 
+        bool is_placed = false, is_flipped = false;
+        float ft = 0.0f, pt = 1.0f;
+        if (fx_active) {
+            const auto& fx = *move_fx_;
+            is_placed = (c.x == fx.placed.x && c.y == fx.placed.y && c.z == fx.placed.z);
+            for (const auto& f : fx.flipped) {
+                if (f.x == c.x && f.y == c.y && f.z == c.z) { is_flipped = true; break; }
+            }
+            ft = clamp01(static_cast<float>(fx_age) / static_cast<float>(kFlipAnimMs));
+            pt = clamp01(static_cast<float>(fx_age) / static_cast<float>(kPlaceAnimMs));
+        }
+
+        // Spawn impact sparks once, at the placed cell's projected position.
+        if (is_placed && !move_fx_->sparks_spawned) {
+            spawn_sparks(sxf, syf, scale, move_fx_->color);
+            move_fx_->sparks_spawned = true;
+        }
+
+        // Placed stone pops in with an overshoot, then settles to full size.
+        int radius = r;
+        if (is_placed) {
+            radius = std::max(2, static_cast<int>(r * std::max(0.15f, ease_out_back(pt))));
+        }
+
         // BLACK = dark core with cyan neon; WHITE = bright core with magenta neon.
         const bool is_black = (cell == BLACK);
-        const auto& neon = is_black ? kCyan : kMagenta;
-        glow(sx, sy, r, neon, static_cast<int>(40.0f * light));
-        if (is_black) {
-            DrawCircle(sx, sy, r, GetColor(shade(12, light), shade(18, light), shade(40, light)), TRUE);
+        const auto& target_neon = is_black ? kCyan : kMagenta;
+        int neon[3];
+        if (is_flipped) {
+            // Ring color transitions from the opponent's neon to ours.
+            const auto& old_neon = (move_fx_->color == BLACK) ? kMagenta : kCyan;
+            for (int i = 0; i < 3; ++i) {
+                neon[i] = static_cast<int>(old_neon[i] + (target_neon[i] - old_neon[i]) * ft);
+            }
         } else {
-            DrawCircle(sx, sy, r, GetColor(shade(255, light), shade(235, light), shade(255, light)), TRUE);
+            for (int i = 0; i < 3; ++i) neon[i] = target_neon[i];
         }
-        DrawCircle(sx, sy, r, rgb(neon, light), FALSE, 2);
+
+        // Ambient neon breathing, phase-shifted per stone.
+        const float breathe = 0.5f + 0.5f * std::sin(static_cast<float>(now) * 0.003f + (c.x + c.y + c.z));
+        glow(sx, sy, radius, neon, static_cast<int>((32.0f + 14.0f * breathe) * light));
+        if (is_flipped) {
+            // Core color lerps from the opponent's core to ours, with a white flash on top.
+            const auto& old_core = (move_fx_->color == BLACK) ? kWhiteCore : kBlackCore;
+            const auto& new_core = is_black ? kBlackCore : kWhiteCore;
+            DrawCircle(sx, sy, radius, mix_color(old_core, new_core, ft, light), TRUE);
+            SetDrawBlendMode(DX_BLENDMODE_ADD, static_cast<int>(170.0f * (1.0f - ft)));
+            DrawCircle(sx, sy, radius, GetColor(255, 245, 255), TRUE);
+            SetDrawBlendMode(DX_BLENDMODE_NOBLEND, 0);
+        } else if (is_black) {
+            DrawCircle(sx, sy, radius, GetColor(shade(12, light), shade(18, light), shade(40, light)), TRUE);
+        } else {
+            DrawCircle(sx, sy, radius, GetColor(shade(255, light), shade(235, light), shade(255, light)), TRUE);
+        }
+        DrawCircle(sx, sy, radius, rgb(neon, light), FALSE, 2);
         // Specular highlight so the stone reads as a sphere.
-        DrawCircle(sx - r / 3, sy - r / 3, std::max(1, r / 5),
+        DrawCircle(sx - radius / 3, sy - radius / 3, std::max(1, radius / 5),
                    is_black ? rgb(kCyan, 0.7f * light) : GetColor(255, 255, 255), TRUE);
+
+        // Expanding shockwave ring around a just-placed stone.
+        if (is_placed && pt < 1.0f) {
+            const int rr = radius + static_cast<int>(70.0f * pt * scale);
+            SetDrawBlendMode(DX_BLENDMODE_ADD, static_cast<int>(150.0f * (1.0f - pt)));
+            DrawCircle(sx, sy, rr, rgb(neon, 0.6f), FALSE, 3);
+            SetDrawBlendMode(DX_BLENDMODE_NOBLEND, 0);
+        }
     }
 }
 
@@ -286,6 +408,23 @@ void DXLibDisplay::mark_valid_moves(const CubeBoard& board, int8_t color) {
 }
 
 void DXLibDisplay::render_frame(const CubeBoard& board, int8_t turn, const std::string& status_message) {
+    const long long now = GetNowCount();
+
+    // Advance the move animation lifecycle and decay the screen shake.
+    if (move_fx_.has_value()) {
+        const long long age = now - move_fx_->t0_ms;
+        if (age > kFlipAnimMs + 400) {
+            move_fx_.reset();
+            shake_x_ = shake_y_ = 0.0f;
+        } else if (age < kShakeMs) {
+            const float a = 1.0f - static_cast<float>(age) / static_cast<float>(kShakeMs);
+            shake_x_ = 5.0f * a * std::sin(static_cast<float>(age) * 0.09f);
+            shake_y_ = 3.0f * a * std::cos(static_cast<float>(age) * 0.13f);
+        } else {
+            shake_x_ = shake_y_ = 0.0f;
+        }
+    }
+
     ClearDrawScreen();
     draw_background(width_, height_);
 
@@ -293,17 +432,41 @@ void DXLibDisplay::render_frame(const CubeBoard& board, int8_t turn, const std::
     draw_grid();
     draw_stones(board);
     mark_valid_moves(board, turn);
+    draw_sparks();
 
     // --- HUD -------------------------------------------------------------
     text_glow(20, 14, "キューブ・オセロ", kCyan, 28);
     DrawLine(20, 50, 300, 50, rgb(kCyan, 0.6f));
 
     const bool black_turn = (turn == BLACK);
-    char buf[96];
-    const char* who = spectate_ ? "  ＜AI同士で観戦中＞"
-                      : (!ai_color_ ? "" : (*ai_color_ == turn ? "  ＜AIの番＞" : "  ＜あなたの番＞"));
-    std::snprintf(buf, sizeof buf, "手番： %s%s", black_turn ? "黒（シアン）" : "白（マゼンタ）", who);
-    text_glow(20, 60, buf, black_turn ? kCyan : kMagenta, 22);
+    char buf[128];
+    const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(now) * 0.004f);
+
+    // Pulsing stone chip shows whose turn it is.
+    glow(34, 72, 12, black_turn ? kCyan : kMagenta, static_cast<int>(90 + 90 * pulse));
+    DrawCircle(34, 72, 12, rgb(black_turn ? kBlackCore : kWhiteCore, 1.15f), TRUE);
+    DrawCircle(34, 72, 12, rgb(black_turn ? kCyan : kMagenta), FALSE, 2);
+
+    std::string who;
+    bool thinking = false;
+    if (spectate_) {
+        who = "  ＜AI同士で観戦中";
+        thinking = true;
+    } else if (ai_color_) {
+        if (*ai_color_ == turn) {
+            who = "  ＜AIの番";
+            thinking = true;
+        } else {
+            who = "  ＜あなたの番＞";
+        }
+    }
+    if (thinking) {
+        const int dots = 1 + static_cast<int>((now / 400) % 3); // animated "thinking" dots
+        for (int i = 0; i < dots; ++i) who += "・";
+        who += "＞";
+    }
+    std::snprintf(buf, sizeof buf, "手番： %s%s", black_turn ? "黒（シアン）" : "白（マゼンタ）", who.c_str());
+    text_glow(54, 60, buf, black_turn ? kCyan : kMagenta, 22);
 
     const int legal = static_cast<int>(board.valid_moves(turn).size());
     std::snprintf(buf, sizeof buf, "置ける場所： %d か所（緑の輪）", legal);
@@ -318,12 +481,24 @@ void DXLibDisplay::render_frame(const CubeBoard& board, int8_t turn, const std::
     const int b = board.count(BLACK), w = board.count(WHITE);
     const int bar_w = 260, bar_x = width_ - bar_w - 24, bar_y = 40;
     const int total = std::max(1, b + w);
-    const int b_px = bar_w * b / total;
+    // Slide the divider smoothly toward the live ratio instead of snapping.
+    const float target = static_cast<float>(b) / static_cast<float>(total);
+    if (score_blend_ < 0.0f) {
+        score_blend_ = target;
+    } else {
+        const double dt = std::min(100.0, static_cast<double>(now - last_frame_ms_));
+        score_blend_ += (target - score_blend_) * static_cast<float>(dt / 240.0);
+    }
+    const int b_px = static_cast<int>(bar_w * score_blend_);
     DrawString(bar_x, 14, "石の数", color_dim_text());
     DrawBox(bar_x - 2, bar_y - 2, bar_x + bar_w + 2, bar_y + 16, GetColor(10, 10, 30), TRUE);
     DrawBox(bar_x, bar_y, bar_x + b_px, bar_y + 14, rgb(kCyan, 0.85f), TRUE);
     DrawBox(bar_x + b_px, bar_y, bar_x + bar_w, bar_y + 14, rgb(kMagenta, 0.85f), TRUE);
     DrawBox(bar_x - 2, bar_y - 2, bar_x + bar_w + 2, bar_y + 16, rgb(kCyan, 0.7f), FALSE);
+    // Glowing divider at the boundary of the two shares.
+    SetDrawBlendMode(DX_BLENDMODE_ADD, static_cast<int>(70 + 70 * pulse));
+    DrawLine(bar_x + b_px, bar_y - 4, bar_x + b_px, bar_y + 18, GetColor(255, 255, 255), 2);
+    SetDrawBlendMode(DX_BLENDMODE_NOBLEND, 0);
     std::snprintf(buf, sizeof buf, "黒 %d", b);
     DrawString(bar_x, bar_y + 22, buf, rgb(kCyan));
     std::snprintf(buf, sizeof buf, "白 %d", w);
@@ -336,10 +511,83 @@ void DXLibDisplay::render_frame(const CubeBoard& board, int8_t turn, const std::
 
     if (!status_message.empty()) {
         const int tw = text_width(status_message.c_str(), 32);
-        text_glow(width_ / 2 - tw / 2, height_ / 2 - 20, status_message.c_str(), kYellow, 32);
+        const int tx = width_ / 2 - tw / 2, ty = height_ / 2 - 20;
+        // Dark panel behind so the result reads clearly over the board.
+        SetDrawBlendMode(DX_BLENDMODE_ALPHA, 180);
+        DrawBox(tx - 26, ty - 16, tx + tw + 26, ty + 48, GetColor(8, 5, 22), TRUE);
+        SetDrawBlendMode(DX_BLENDMODE_NOBLEND, 0);
+        // Pulse the text color between yellow and white.
+        const float mp = 0.5f + 0.5f * std::sin(static_cast<float>(now) * 0.003f);
+        const int col[3] = {255, 240 + static_cast<int>(15 * mp), 60 + static_cast<int>(195 * mp)};
+        text_glow(tx, ty, status_message.c_str(), col, 32);
     }
 
+    last_frame_ms_ = now;
     ScreenFlip();
+}
+
+void DXLibDisplay::notify_move(const Move& placed, const std::vector<Move>& flipped, int8_t color) {
+    MoveFx fx;
+    fx.placed = placed;
+    fx.flipped = flipped;
+    fx.color = color;
+    fx.t0_ms = GetNowCount();
+    move_fx_ = fx;
+}
+
+void DXLibDisplay::clear_effects() {
+    move_fx_.reset();
+    sparks_.clear();
+    shake_x_ = shake_y_ = 0.0f;
+    score_blend_ = -1.0f;
+}
+
+void DXLibDisplay::reset_view() {
+    yaw_ = kDefaultYaw;
+    pitch_ = kDefaultPitch;
+}
+
+void DXLibDisplay::spawn_sparks(float x, float y, float scale, int8_t color) {
+    const long long now = GetNowCount();
+    // Drop expired sparks so the list stays short.
+    sparks_.erase(std::remove_if(sparks_.begin(), sparks_.end(),
+                                [now](const Spark& s) { return now - s.t0_ms > s.life_ms; }),
+                  sparks_.end());
+    std::uniform_real_distribution<float> angle(0.0f, 2.0f * kPi);
+    std::uniform_real_distribution<float> speed(30.0f, 170.0f * scale);
+    std::uniform_int_distribution<int> life(350, 700);
+    const auto& base = (color == BLACK) ? kCyan : kMagenta;
+    for (int i = 0; i < 14; ++i) {
+        Spark s;
+        const float a = angle(fx_rng_), v = speed(fx_rng_);
+        s.x = x;
+        s.y = y;
+        s.vx = std::cos(a) * v;
+        s.vy = std::sin(a) * v * 0.7f - 40.0f; // slight upward bias
+        s.t0_ms = now;
+        s.life_ms = life(fx_rng_);
+        // Some sparks flash yellow-hot for a metallic impact look.
+        const float mixt = (i % 3 == 0) ? 1.0f : 0.35f;
+        s.r = base[0] + static_cast<int>((kYellow[0] - base[0]) * mixt);
+        s.g = base[1] + static_cast<int>((kYellow[1] - base[1]) * mixt);
+        s.b = base[2] + static_cast<int>((kYellow[2] - base[2]) * mixt);
+        sparks_.push_back(s);
+    }
+}
+
+void DXLibDisplay::draw_sparks() {
+    if (sparks_.empty()) return;
+    const long long now = GetNowCount();
+    for (const Spark& s : sparks_) {
+        const long long age = now - s.t0_ms;
+        if (age > s.life_ms) continue;
+        const float t = static_cast<float>(age) / static_cast<float>(s.life_ms);
+        const int px = static_cast<int>(s.x + s.vx * t);
+        const int py = static_cast<int>(s.y + s.vy * t + 120.0f * t * t); // gravity
+        SetDrawBlendMode(DX_BLENDMODE_ADD, static_cast<int>(220.0f * (1.0f - t)));
+        DrawCircle(px, py, std::max(1, static_cast<int>(3.0f * (1.0f - t))), GetColor(s.r, s.g, s.b), TRUE);
+    }
+    SetDrawBlendMode(DX_BLENDMODE_NOBLEND, 0);
 }
 
 namespace {
@@ -364,6 +612,17 @@ int start_top() { return diff_top() + kMenuDiffH + 28; }
 void DXLibDisplay::render_menu(int mode, int difficulty) {
     ClearDrawScreen();
     draw_background(width_, height_);
+
+    // Opening-position demo board slowly rotating behind the menu panels.
+    yaw_ += 0.006f;
+    pitch_ = kDefaultPitch + 0.12f * std::sin(static_cast<float>(GetNowCount()) * 0.0008f);
+    {
+        CubeBoard demo;
+        demo.initialize();
+        draw_cube_faces();
+        draw_grid();
+        draw_stones(demo);
+    }
 
     int mx, my;
     GetMousePoint(&mx, &my);

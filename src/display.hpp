@@ -1,8 +1,11 @@
 // Cube Othello -- DXLibDisplay: flat-plane isometric rendering + input (DXLib).
 #pragma once
 
+#include <cstdint>
 #include <optional>
+#include <random>
 #include <string>
+#include <vector>
 
 #include "board.hpp"
 
@@ -47,6 +50,14 @@ public:
     // AI vs AI: the HUD labels the game as "spectating" instead.
     void set_spectate(bool spectate) { spectate_ = spectate; }
 
+    // Tell the display that a move was just applied, so it can animate it
+    // (placed-stone pop, flip color transition, sparks, screen shake).
+    void notify_move(const Move& placed, const std::vector<Move>& flipped, int8_t color);
+    // Drop any in-flight animations (new game, undo, return to menu).
+    void clear_effects();
+    // Restore the default camera (used when a game starts from the menu).
+    void reset_view();
+
     // Full frame: clear -> wireframe faces -> grid -> stones -> "+" markers
     // for `turn`'s legal moves -> turn/score overlay -> status_message.
     void render_frame(const CubeBoard& board, int8_t turn, const std::string& status_message);
@@ -83,6 +94,32 @@ private:
 
     // Nearest-to-viewer legal cell under the mouse pointer, if any.
     std::optional<Move> pick_move(const CubeBoard& board, int8_t turn, int mx, int my) const;
+
+    // --- move/flip animations (set via notify_move, cleared by clear_effects) ---
+    struct MoveFx {
+        Move placed;
+        std::vector<Move> flipped;
+        int8_t color = -1;
+        long long t0_ms = 0;
+        bool sparks_spawned = false;
+    };
+    struct Spark {
+        float x, y, vx, vy; // start pos (screen px), velocity (px over full life)
+        long long t0_ms;
+        int life_ms;
+        int r, g, b;
+    };
+
+    std::optional<MoveFx> move_fx_;
+    std::vector<Spark> sparks_;
+    std::mt19937 fx_rng_{std::random_device{}()};
+    float score_blend_ = -1.0f; // smoothed black-share for the score bar
+    long long last_frame_ms_ = 0;
+    float shake_x_ = 0.0f, shake_y_ = 0.0f; // decaying screen shake offset
+
+    // Impact particles at a placed stone's projected screen position.
+    void spawn_sparks(float x, float y, float scale, int8_t color);
+    void draw_sparks();
 };
 
 } // namespace cubo_othello
